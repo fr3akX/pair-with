@@ -40,6 +40,7 @@ These would count as failure even if everything technically worked:
 - Agents can merge to `main`, but never deploy or record a release.
 - Agents run on Linux. iOS is tested on the Mac over SSH, in one dedicated checkout, one run at a time. If the Mac is unavailable, that work waits. On low disk, the run asks the user and deletes nothing.
 - One command starts a run: that session is the first agent, and it starts the other in a herdr pane. Without herdr it stops and says so.
+- A vague GitHub issue gets a brainstorm with the user and is split into backlog items as part of the workflow, before the second agent starts.
 - A first run in a new repo drafts settings and backlog folder and waits for approval.
 - Both agents read one skill file, linked into `~/.claude/skills` and `~/.codex/skills` from this repo.
 
@@ -63,6 +64,10 @@ These go beyond what was discussed:
 14. **A check must leave its worktree unchanged.** Otherwise what was tested isn't what merges. `main` is moved to the exact tested commit, and a rename counts as both of its paths.
 15. **Interrupted commands recover from git.** Children keep the helper's locks alive, so a retry waits for a killed run's check to end, with a time limit enforced outside the helper. The tested commit is recorded before `main` moves, so a retry or the other agent's next call can finish an interrupted merge. Items whose file or branch disappears go to the user.
 16. **The Mac refuses to reset while a run is alive**, using a PID file in the checkout, for runs whose SSH connection dropped.
+17. **Decisions live in a committed brief** at `docs/backlog/briefs/<issue>-<topic>.md`, which every item names, so both builder and reviewer see them. It stays after the run as the record.
+18. **Issues stay in the user's hands.** Agents read them but only comment, label or close when asked. `issue:` on an item lets `status` report when an issue's items have all landed, and the user pushes and closes it.
+19. **The approved breakdown is one commit on `main`**, holding only the brief and items. The run can't see them otherwise, and approval covers that commit only.
+20. **The brainstorm is written into this skill**, not delegated to `superpowers:brainstorming`, because that skill ends by handing off to a plan and only exists where superpowers is installed.
 
 ## Known limits
 

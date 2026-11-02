@@ -1,6 +1,6 @@
 # backlog-duo
 
-A skill that has two coding agents work one repo's backlog in parallel. Each builds items and each reviews what the other built. The reviewer fixes what it finds and merges, so nothing gets handed back.
+A skill that has two coding agents work one repo's backlog in parallel. Each builds items and each reviews what the other built. The reviewer fixes what it finds and merges, so nothing gets handed back. Vague GitHub issues are settled with you and split into backlog items first.
 
 - Skill: `skills/backlog-duo/SKILL.md`
 - Coordination helper: `skills/backlog-duo/scripts/duo.py`

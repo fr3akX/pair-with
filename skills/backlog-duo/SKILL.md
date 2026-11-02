@@ -1,11 +1,11 @@
 ---
 name: backlog-duo
-description: Use when two coding agents should work through a repo's backlog in parallel without duplicating work, when the user says "backlog duo", "run the duo", or "work the backlog in parallel", or when an agent has been started to join a backlog-duo run under a given agent name.
+description: Use when two coding agents should work through a repo's backlog or a GitHub issue in parallel without duplicating work, when the user says "backlog duo", "run the duo", "work the backlog in parallel", or "run the duo on issue N", or when an agent has been started to join a backlog-duo run under a given agent name.
 ---
 
 # Backlog Duo
 
-Two agents share one backlog. Each builds items, and each reviews what the other built. The reviewer fixes what it finds and merges; it never hands a review back.
+Two agents share one backlog. Each builds items, and each reviews what the other built. The reviewer fixes what it finds and merges; it never hands a review back. Vague work is settled with the user and split into items first, before the second agent starts.
 
 `scripts/duo.py` (next to this file) owns all shared state. Run it as `python3 <this skill's directory>/scripts/duo.py <command>` from anywhere inside the repo. It prints JSON. Trust its answers over your own reading of the repo.
 
@@ -25,15 +25,41 @@ You are the first agent unless your prompt names you as joining a run.
 
 1. Run `duo.py doctor`. If it reports no settings file, do **First-time setup**, then run it again.
 2. If `doctor` reports `problems`, show them to the user and stop. Show `warnings` too, then continue. If it reports it can't write to the git directory, see **Permissions**.
-3. Your agent name is the settings key whose `kind` matches you (`claude` or `codex`).
-4. Start the other agent. If `HERDR_ENV` isn't `1`, stop and tell the user this skill must be started inside a herdr pane.
+3. If the user named an issue or described work that has no items yet, do **Turning an issue into items**, then run `doctor` again.
+4. Your agent name is the settings key whose `kind` matches you (`claude` or `codex`).
+5. Start the other agent. If `HERDR_ENV` isn't `1`, stop and tell the user this skill must be started inside a herdr pane.
    ```bash
    pane=$(herdr pane split --current --direction right --cwd "$PWD" --no-focus | jq -r .result.pane.pane_id)
    herdr agent start duo-<name> --kind <kind> --pane "$pane" --timeout 120000 -- <args from settings>
    herdr agent prompt duo-<name> "Use the backlog-duo skill. You are joining a run as agent '<name>'. Go straight to The loop."
    ```
    Don't pass `--wait` to the prompt: you start working straight away too. If the other agent can't start, stop and tell the user.
-5. Go to **The loop**.
+6. Go to **The loop**.
+
+## Turning an issue into items
+
+Do this alone, with the user present, before the other agent starts. Agents can't ask questions once the run begins, so every answer that changes what gets built must be settled here.
+
+**1. Understand it.** Read the issue with its comments (`gh issue view <n> --comments`), the docs and code it touches, and anything it links to. Look for repo rules that shape the work, such as features that must exist in every client.
+
+**2. Settle what's open.** List every point where a builder would have to guess and a wrong guess would matter. Answer what the repo can answer. Ask the user about the rest, most important first, one question per message, each with your recommended answer and the reason for it. Stop when nothing important is left. If the user says "use your judgment", take your recommendations and mark them as your calls in the brief.
+
+**3. Write the brief** at `docs/backlog/briefs/<issue>-<topic>.md`: the goal, what's out of scope, each decision and who made it, and what done looks like. Name anything agents can't verify, such as a real-world test, as work left for the user.
+
+**4. Split it into items** in `docs/backlog/`, using the format below, with `issue: <n>` on each. Every item must:
+
+- leave the main branch working when it merges alone, with its own tests
+- be small enough for one agent to build and another to review in one sitting
+- stand alone: say what to build and how to tell it's done, and name the brief
+- declare `touches` as narrowly as honesty allows, since overlapping items can't run at once
+
+Put shared foundations first and use `depends` for anything needing them. Prefer splits that let two items run at once. A chain of dependencies leaves one agent waiting, so say so if parallel work isn't possible.
+
+**5. Get approval.** Show the user the decisions and a table of items with what each covers, what it depends on, and which can run at the same time. Change what they ask for. Don't start without a yes.
+
+**6. Commit.** Approval covers one commit on the main branch holding only the brief and item files. Stage those exact paths. If you're not on the main branch or anything else is already staged, stop and ask. Don't push.
+
+Comment on, label, or close an issue only if the user asks.
 
 ## First-time setup
 
@@ -52,13 +78,15 @@ worth: yes
 added: 2026-11-02
 touches: server/src/billing/**, docs/billing.md
 depends: other-item-slug
+issue: 22
 ---
 # What's wrong or wanted, as a title
 
 Enough detail for an agent who wasn't there to do it and to know when it's done.
+Brief: docs/backlog/briefs/22-billing.md
 ```
 
-Only `worth: yes` items run. `touches` is required: it's how overlap is judged, so list every area the work may change. `depends` is optional.
+Only `worth: yes` items run. `touches` is required: it's how overlap is judged, so list every area the work may change. `depends` and `issue` are optional.
 
 ## The loop
 
@@ -93,7 +121,7 @@ An approval prompt pauses an agent until the user answers in its pane.
 
 ## Implementing
 
-1. Work only in `worktree`. Read `file` from the main branch.
+1. Work only in `worktree`. Read `file` from the main branch, and the brief if it names one. The brief's decisions are settled: follow them.
 2. Build it, with tests, following the repo's conventions. Commit on the branch.
 3. Run `duo.py check <item> --agent <name>` and fix failures. Exit 3 (machine unavailable) doesn't block you: submit anyway, since the merge can't pass without that check. Exit 4 sends the item to the user: go back to the loop. If `uncovered` is listed, or the exit is 2, escalate.
 4. Run `duo.py submit <item> --agent <name>`. Mention any `undeclared` files in your summary, then return to the loop.
@@ -104,7 +132,7 @@ After submitting, the item isn't yours. Don't touch that branch again.
 
 You now own this branch, in `worktree`. The author has moved on and will not read your findings.
 
-1. Read `file`, then the whole diff against the main branch. Check it against what the item asked for. Look for wrong behavior, missing cases, missing tests, and changes the item didn't ask for.
+1. Read `file`, its brief if it names one, then the whole diff against the main branch. Check it against what the item and brief asked for. Look for wrong behavior, missing cases, missing tests, and changes the item didn't ask for.
 2. Fix every real problem yourself and commit on the branch. Leave matters of taste alone: a different style isn't a problem, and neither is code you'd merely have written differently.
 3. Run `duo.py merge <item> --agent <name>`. It rebases, reruns checks if anything changed, and lands the work. Exit codes:
 
@@ -123,7 +151,7 @@ You now own this branch, in `worktree`. The author has moved on and will not rea
 
 Escalate only when one of these is true:
 
-- The item is too unclear to tell what done means.
+- The item and its brief are too unclear to tell what done means.
 - A correct fix would change the item's intended design.
 - A check can't be made to pass after a real attempt.
 
@@ -141,7 +169,7 @@ A check must leave the worktree unchanged. If `check` says a check changed files
 
 ## Finishing
 
-When `next` says stop, run `duo.py status` and report to the user: what merged, each `needs_you` item and the decision it needs, each `held` item, each `attention` item, and anything still `active`. Stop there. The other agent reports on its own.
+When `next` says stop, run `duo.py status` and report to the user: what merged, each `needs_you` item and the decision it needs, each `held` item, each `attention` item, and anything still `active`. For each entry in `issues`, say whether it's `complete` or what remains, and list the work its brief leaves for the user. A complete issue still needs the user to push and close it. Stop there. The other agent reports on its own.
 
 ## Red flags
 
@@ -150,6 +178,8 @@ When `next` says stop, run `duo.py status` and report to the user: what merged, 
 | "I'll send the author these findings" | No. Fix them, or escalate if they meet the rules above |
 | "The other agent's task looks stuck, I'll take it" | Never take held work. It's a stop or a `status` report for the user |
 | "It's waiting, so I'll grab something nearby" | Waiting is correct. Anything nearby probably overlaps |
+| "The issue is vague, but the agents can work it out" | They can't ask anyone once the run starts. Settle it first |
+| "This decision is small, I'll pick for the user" | If a wrong guess would matter, ask. If it wouldn't, record it as your call |
 | "This failing check is unrelated to the change" | The merge will still refuse. Fix it or escalate |
 | "A small direct commit to main is fine" | Only `duo.py merge` lands work |
 | "The Mac needs disk space, I'll clear old builds" | Delete nothing. Low disk goes to the user |

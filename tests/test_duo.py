@@ -61,7 +61,8 @@ class Repo:
         return subprocess.run(["git", *args], cwd=cwd or self.root, env=self.env, check=True,
                               capture_output=True, text=True).stdout.strip()
 
-    def item(self, slug, touches="server/**", worth="yes", added="2026-01-01", depends=None):
+    def item(self, slug, touches="server/**", worth="yes", added="2026-01-01", depends=None,
+             issue=None):
         folder = self.root / "docs/backlog"
         folder.mkdir(parents=True, exist_ok=True)
         lines = ["---", f"worth: {worth}", f"added: {added}"]
@@ -69,6 +70,8 @@ class Repo:
             lines.append(f"touches: {touches}")
         if depends:
             lines.append(f"depends: {depends}")
+        if issue:
+            lines.append(f"issue: {issue}")
         (folder / f"{slug}.md").write_text("\n".join(lines + ["---", f"# {slug}", ""]))
         self.git("add", ".")
         self.git("commit", "-qm", f"add {slug}")
@@ -645,6 +648,52 @@ class CodexFindings(Base):
         repo.item("one")
         repo.duo("doctor")
         self.assertFalse((repo.root / ".git/backlog-duo").exists())
+
+
+class Intake(Base):
+    def test_issue_is_complete_only_when_all_its_items_landed(self):
+        repo = self.repo()
+        repo.item("core", touches="server/**", issue="22", added="2026-01-01")
+        repo.item("web", touches="web/**", issue="22", added="2026-01-02", depends="core")
+        repo.item("unrelated", touches="other/**", worth="later")
+        self.assertEqual(repo.duo("status")[1]["issues"],
+                         {"22": {"merged": [], "remaining": ["core", "web"], "complete": False}})
+        answer = repo.do_item("claude")
+        self.assertEqual(answer["issue"], "22")
+        repo.next("codex")
+        self.assertEqual(repo.duo("merge", "core", "--agent", "codex")[0], 0)
+        self.assertEqual(repo.duo("status")[1]["issues"],
+                         {"22": {"merged": ["core"], "remaining": ["web"], "complete": False}})
+        answer = repo.next("claude")
+        self.assertEqual(answer["item"], "web")
+        repo.work(answer, "web/a.txt")
+        repo.duo("submit", "web", "--agent", "claude")
+        repo.next("codex")
+        self.assertEqual(repo.duo("merge", "web", "--agent", "codex")[0], 0)
+        self.assertEqual(repo.duo("status")[1]["issues"],
+                         {"22": {"merged": ["core", "web"], "remaining": [], "complete": True}})
+
+    def test_escalated_item_keeps_its_issue_incomplete(self):
+        repo = self.repo()
+        repo.item("core", issue="22")
+        repo.do_item("claude")
+        repo.next("codex")
+        repo.duo("escalate", "core", "--agent", "codex", "--reason", "unclear")
+        self.assertFalse(repo.duo("status")[1]["issues"]["22"]["complete"])
+
+    def test_brief_beside_items_is_not_treated_as_an_item(self):
+        repo = self.repo()
+        repo.item("core", issue="22")
+        briefs = repo.root / "docs/backlog/briefs"
+        briefs.mkdir()
+        (briefs / "22-thing.md").write_text("# Brief\n")
+        repo.git("add", ".")
+        repo.git("commit", "-qm", "brief")
+        self.assertEqual(repo.duo("status")[1]["open"], ["core"])
+        answer = repo.do_item("claude")
+        repo.next("codex")
+        self.assertEqual(repo.duo("merge", answer["item"], "--agent", "codex")[0], 0)
+        self.assertTrue((repo.root / "docs/backlog/briefs/22-thing.md").exists())
 
 
 class Machines(Base):

@@ -221,7 +221,7 @@ def parse_item(slug, text):
             key, value = key.strip(), value.strip()
             if key in ("touches", "depends"):
                 item[key] = split_list(value)
-            elif key in ("worth", "added", "where"):
+            elif key in ("worth", "added", "where", "issue"):
                 item[key] = value
     for line in body:
         if line.startswith("# "):
@@ -275,7 +275,8 @@ def finish_merge(ctx, st, slug, sha):
         else:
             warnings.append(f"left branch in place: {item['branch']}")
     st["merged"].append({"item": slug, "sha": sha, "author": item["author"],
-                         "reviewer": item.get("reviewer"), "at": time.time(),
+                         "reviewer": item.get("reviewer"), "issue": item.get("issue"),
+                         "at": time.time(),
                          "warnings": warnings})
 
 
@@ -332,6 +333,7 @@ def item_view(ctx, slug, item, action):
         "branch": item["branch"],
         "worktree": item["worktree"],
         "author": item["author"],
+        "issue": item.get("issue"),
         "main": ctx.main,
         "off_limits": ctx.settings.get("off_limits", []),
         "repo_notes": ctx.settings.get("repo_notes", ""),
@@ -396,6 +398,7 @@ def choose_next(ctx, agent, st):
             "branch": branch,
             "worktree": path,
             "touches": candidate["touches"],
+            "issue": candidate.get("issue"),
             "changed": [],
             "checks": {},
             "claimed_at": now,
@@ -856,6 +859,20 @@ def cmd_merge(ctx, args):
     emit(report, code)
 
 
+def issue_progress(merged, on_main):
+    """For each issue: which of its items landed, which remain, and whether it's finished."""
+    issues = {}
+    for record in merged:
+        if record.get("issue"):
+            issues.setdefault(record["issue"], {"merged": [], "remaining": []})["merged"].append(record["item"])
+    for slug, item in on_main.items():
+        if item.get("issue"):
+            issues.setdefault(item["issue"], {"merged": [], "remaining": []})["remaining"].append(slug)
+    for progress in issues.values():
+        progress["complete"] = bool(progress["merged"]) and not progress["remaining"]
+    return issues
+
+
 def cmd_status(ctx, _args):
     with state(ctx) as st:
         reconcile(ctx, st)
@@ -876,6 +893,7 @@ def cmd_status(ctx, _args):
             "attention": attention,
             "open": sorted(s for s, c in on_main.items() if s not in items and c["worth"] == "yes"),
             "merged": st["merged"],
+            "issues": issue_progress(st["merged"], on_main),
         }
     emit(emit_obj)
 
