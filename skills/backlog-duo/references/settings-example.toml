@@ -1,0 +1,60 @@
+# .backlog-duo.toml, modeled on a repo with a Rust server, a web UI and an iOS app.
+# Only main_branch, [agents] (exactly two) and at least one [[checks]] are required.
+# Confirm every command on the real repo during first-time setup.
+
+main_branch = "main"
+max_unreviewed = 2         # An agent waits once this many of its items await review.
+max_wait_minutes = 120     # An agent stops after waiting this long for the other one.
+machine_wait_minutes = 60  # How long to wait in line for a test machine.
+push_after_merge = false   # true pushes main to origin after every merge.
+
+# Changes under these need no check. A changed file that no check and no
+# exemption covers blocks the merge. Patterns: '*' also crosses '/'.
+no_checks_needed = ["docs/**", "*.md"]
+
+# Shown to both agents with every item. Not enforced by duo.py.
+off_limits = [
+  "Don't run kubectl or anything under deploy/.",
+  "Don't add release records to the docs.",
+]
+repo_notes = "Keep the native iOS contract in sync: scripts/generate-ios-contract.py."
+
+# Each agent's kind is its herdr agent kind. args go to its command line.
+# Approval prompts pause an agent until you answer in its pane. See Permissions in SKILL.md.
+[agents.claude]
+kind = "claude"
+args = ["--model", "opus"]
+
+[agents.codex]
+kind = "codex"
+args = ["-m", "gpt-6.1-sol",  # or "gpt-6-astra"
+        "--sandbox", "workspace-write",
+        "-c", 'sandbox_workspace_write.writable_roots=["/home/maris/projects/weat/.git"]',
+        "-c", "sandbox_workspace_write.network_access=true"]
+
+# A remote test machine runs one check at a time. Create its checkout once with
+# `duo.py setup-machine mac`. It's dedicated: every run resets it to the tested commit.
+[machines.mac]
+ssh = "maris@192.168.0.111"
+checkout = "~/Projects/weat-duo"
+min_free_gb = 3            # Below this the item goes to you. Nothing gets deleted.
+
+[[checks]]
+name = "server"
+when = ["server/**", "Cargo.toml", "Cargo.lock"]
+run = "cargo test --locked --offline --workspace"
+timeout_minutes = 30
+
+[[checks]]
+name = "web"
+when = ["server/**", "scripts/test-*.cjs"]
+run = "node scripts/test-ui-logic.cjs && node scripts/test-web.cjs"
+
+[[checks]]
+name = "ios"
+# server/src/command-schema.json generates the iOS contract that build-ios.sh verifies.
+when = ["ios-app/**", "scripts/build-ios.sh", "scripts/generate-ios-contract.py",
+        "server/src/command-schema.json"]
+machine = "mac"
+run = "./scripts/build-ios.sh 'platform=iOS Simulator,id=87578329-F7BE-4102-9218-9E9B422C8030'"
+timeout_minutes = 45
