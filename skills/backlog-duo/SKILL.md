@@ -25,7 +25,7 @@ You are the first agent unless your prompt names you as joining a run.
 
 1. Run `duo.py doctor`. If it reports no settings file, do **First-time setup**, then run it again.
 2. If `doctor` reports `problems`, show them to the user and stop. Show `warnings` too, then continue. If it reports it can't write to the git directory, see **Permissions**.
-3. If the user named an issue or described work that has no items yet, do **Turning an issue into items**, then run `doctor` again.
+3. If the user named an issue or described work that has no items yet, do **Turning an issue into items**, then run `doctor` again. If they named an outcome with no fixed end, such as reaching parity, also do **Running toward a goal**.
 4. Your agent name is the settings key whose `kind` matches you (`claude` or `codex`).
 5. Start the other agent. If `HERDR_ENV` isn't `1`, stop and tell the user this skill must be started inside a herdr pane.
    ```bash
@@ -38,7 +38,7 @@ You are the first agent unless your prompt names you as joining a run.
 
 ## Turning an issue into items
 
-Do this alone, with the user present, before the other agent starts. Agents can't ask questions once the run begins, so every answer that changes what gets built must be settled here.
+Do this alone, with the user present, before the other agent starts. Once the run begins, agents can only ask each other, so every answer only the user can give must be settled here.
 
 **1. Understand it.** Read the issue with its comments (`gh issue view <n> --comments`), the docs and code it touches, and anything it links to. Look for repo rules that shape the work, such as features that must exist in every client.
 
@@ -60,6 +60,23 @@ Put shared foundations first and use `depends` for anything needing them. Prefer
 **6. Commit.** Approval covers one commit on the main branch holding only the brief and item files. Stage those exact paths. If you're not on the main branch or anything else is already staged, stop and ask. Don't push.
 
 Comment on, label, or close an issue only if the user asks.
+
+## Running toward a goal
+
+The run keeps itself going by making the last item of each batch plan the next batch. The approved commit holds the following:
+
+- **A brief** at `docs/backlog/briefs/goal-<topic>.md`: the goal, how progress is measured, the test for done, and what only the user can do.
+- **An item** `plan-batch-<n>`, with `touches: docs/backlog/**`, naming that brief and depending on every other item in the batch.
+
+**Building a `plan-batch-<n>` item.** Measure progress from the repo's evidence, then do the first of these that applies:
+
+1. If the done test is met, or everything left needs the user, add no new items. Record the result and what's left in the brief. This ends the run.
+2. If the last two batches added no verified behaviour, do the same and say so.
+3. Otherwise write the next 3 to 6 items, using the rules in **Turning an issue into items**, plus `plan-batch-<n+1>` depending on all of them.
+
+**Reviewing a `plan-batch-<n>` item.** Check that the measurement is true, that each item moves the goal forward, and that nothing repeats work already done or waits on the user. Fix the plan yourself, then merge.
+
+A goal never widens what's off limits. Deploying, pushing and anything else reserved for the user stay reserved.
 
 ## First-time setup
 
@@ -123,7 +140,7 @@ An approval prompt pauses an agent until the user answers in its pane.
 
 1. Work only in `worktree`. Read `file` from the main branch, and the brief if it names one. The brief's decisions are settled: follow them.
 2. Build it, with tests, following the repo's conventions. Commit on the branch.
-3. Run `duo.py check <item> --agent <name>` and fix failures. Exit 3 (machine unavailable) doesn't block you: submit anyway, since the merge can't pass without that check. Exit 4 sends the item to the user: go back to the loop. If `uncovered` is listed, or the exit is 2, escalate.
+3. Test what you changed; see **Testing while you work**. The full checks run at merge, so don't run `duo.py check` before submitting, with one exception: if your change can only be tested on a test machine, run `duo.py check <item> --agent <name>` and fix failures. There, exit 3 (machine unavailable) doesn't block you: submit anyway, since the merge can't pass without that check. Exit 4 sends the item to the user: go back to the loop. If `uncovered` is listed, or the exit is 2, escalate.
 4. Run `duo.py submit <item> --agent <name>`. Mention any `undeclared` files in your summary, then return to the loop.
 
 After submitting, the item isn't yours. Don't touch that branch again.
@@ -133,8 +150,8 @@ After submitting, the item isn't yours. Don't touch that branch again.
 You now own this branch, in `worktree`. The author has moved on and will not read your findings.
 
 1. Read `file`, its brief if it names one, then the whole diff against the main branch. Check it against what the item and brief asked for. Look for wrong behavior, missing cases, missing tests, and changes the item didn't ask for.
-2. Fix every real problem yourself and commit on the branch. Leave matters of taste alone: a different style isn't a problem, and neither is code you'd merely have written differently.
-3. Run `duo.py merge <item> --agent <name>`. It rebases, reruns checks if anything changed, and lands the work. Exit codes:
+2. Fix every real problem yourself and commit on the branch, testing your fixes as described in **Testing while you work**. Leave matters of taste alone: a different style isn't a problem, and neither is code you'd merely have written differently.
+3. Run `duo.py merge <item> --agent <name>`. It rebases, runs the full checks unless that exact code already passed them, and lands the work. Exit codes:
 
 | Exit | Meaning | Do this |
 |---|---|---|
@@ -147,12 +164,21 @@ You now own this branch, in `worktree`. The author has moved on and will not rea
 | 6 | Main couldn't be updated | Already sent to the user. Back to the loop |
 | 7 | An earlier run is still going | Back to the loop; you'll get the item again |
 
+## Questions
+
+The other agent answers your questions, through the review. Don't stop to wait for an answer.
+
+- **While building:** make the best-supported call, list it under `Calls for the reviewer:` in your commit message, and keep going.
+- **While reviewing:** rule on every listed call. Keep it, or change it and fix the code. A question you have yourself is yours to settle.
+
+A decision the brief records as the user's stands. Changing one is an escalation.
+
 ## Escalating
 
 Escalate only when one of these is true:
 
-- The item and its brief are too unclear to tell what done means.
-- A correct fix would change the item's intended design.
+- Only the user can answer: credentials, payment, or a real-world fact no agent here can test. Where other work can continue on a cautious default, take the default, record it as left for the user in the item's notes, and don't escalate.
+- A correct fix would overturn a decision the brief records as the user's.
 - A check can't be made to pass after a real attempt.
 
 ```bash
@@ -161,11 +187,18 @@ duo.py escalate <item> --agent <name> --reason "<what the user must decide>"
 
 Then return to the loop. Never send problems back to the other agent, wait for it to fix them, or ask it to redo work.
 
+## Testing while you work
+
+While building or fixing, run only the tests for what you changed. Use the command `repo_notes` names for running tests, if it names one.
+
+- A run that reports no tests, or fewer than it should, is not a pass.
+- `duo.py merge` is the gate. It runs every check the change triggers, in full. Run it with nothing that narrows what a check covers, including environment variables, filters and edits to the settings.
+
 ## Long commands
 
 `check` and `merge` can take many minutes. Run them with your tool's background or long-timeout mode so a tool time limit doesn't kill them. If one is killed anyway, run it again: it waits for anything still running from the killed attempt, and a merge that already reached the main branch reports success.
 
-A check must leave the worktree unchanged. If `check` says a check changed files, fix the check's cause or escalate; don't commit around it.
+A check must leave the worktree unchanged. If `check` or `merge` says a check changed files, fix the check's cause or escalate; don't commit around it.
 
 ## Finishing
 
@@ -178,8 +211,12 @@ When `next` says stop, run `duo.py status` and report to the user: what merged, 
 | "I'll send the author these findings" | No. Fix them, or escalate if they meet the rules above |
 | "The other agent's task looks stuck, I'll take it" | Never take held work. It's a stop or a `status` report for the user |
 | "It's waiting, so I'll grab something nearby" | Waiting is correct. Anything nearby probably overlaps |
-| "The issue is vague, but the agents can work it out" | They can't ask anyone once the run starts. Settle it first |
-| "This decision is small, I'll pick for the user" | If a wrong guess would matter, ask. If it wouldn't, record it as your call |
+| "The issue is vague, but the agents can work it out" | They can't ask the user once the run starts. Settle what only the user can answer first |
+| "This decision is small, I'll pick for the user" | Before the run, ask if a wrong guess would matter. During it, list the call for the reviewer |
+| "I'll stop and wait for the user on this question" | Only the user-only cases in **Escalating** go to them. Everything else goes to the reviewer |
+| "The queue is empty, so the goal must be done" | Only the `plan-batch` item decides that, against the brief's done test |
 | "This failing check is unrelated to the change" | The merge will still refuse. Fix it or escalate |
+| "I'll run the full check before submitting, to be safe" | The merge runs it. Test what you changed and submit |
+| "I'll narrow the check so this merge goes faster" | Never. Narrow your own test runs, not the gate |
 | "A small direct commit to main is fine" | Only `duo.py merge` lands work |
 | "The Mac needs disk space, I'll clear old builds" | Delete nothing. Low disk goes to the user |

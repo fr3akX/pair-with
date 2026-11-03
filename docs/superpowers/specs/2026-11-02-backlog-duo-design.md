@@ -35,8 +35,9 @@ These would count as failure even if everything technically worked:
 - Overlap is judged from what each item declares it touches.
 - Each task gets its own branch and worktree. Reviews come before new work. Agents never self-review.
 - The reviewer's fixes aren't reviewed again. Merging is the final step, and tests are the only gate on those fixes.
+- While building or fixing, agents run only the tests for what they changed. The full checks run at merge and are never narrowed. (The exception for work that can only be tested on a test machine was a call made while building.)
 - A task that needs unmerged work waits for that merge.
-- The user is involved only when an item is unclear, a fix would change its design, or tests can't be made to pass.
+- The run continues without the user until its goal is done. Questions go to the other agent first. The user is involved only for what no agent can answer, or when tests can't be made to pass. (Answering through the review rather than a live channel, and making each batch's last item plan the next, were calls made while building.)
 - Agents can merge to `main`, but never deploy or record a release.
 - Agents run on Linux. iOS is tested on the Mac over SSH, in one dedicated checkout, one run at a time. If the Mac is unavailable, that work waits. On low disk, the run asks the user and deletes nothing.
 - One command starts a run: that session is the first agent, and it starts the other in a herdr pane. Without herdr it stops and says so.
@@ -75,7 +76,7 @@ These go beyond what was discussed:
 - **The real Mac and herdr startup are untested.** The tests cover `duo.py` with real git repos and a stand-in for SSH.
 - **The Mac has 5.9 GB free today.** Below the configured minimum, iOS work goes to the user until space is cleared.
 - **The web check's prerequisites are unconfirmed.** First-time setup must run each check to confirm it works unattended.
-- **Each worktree builds from scratch**, unless a check sets its own shared build folder (`CARGO_TARGET_DIR`, for example).
+- **Each worktree builds from scratch.** Don't simply share a build folder between worktrees to avoid this. In a `wko5-port` test with one `CARGO_TARGET_DIR`, a worktree reported `Finished` without compiling its own code and ran the other worktree's binary, so a check could pass on untested code. A shared folder needs a wrapper that holds one lock and clears the package's build whenever the worktree changes.
 
 ## Left to the builder
 
