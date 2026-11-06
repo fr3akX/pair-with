@@ -1,4 +1,4 @@
-"""End-to-end tests for duo.py against throwaway git repos. Run: python3 -m unittest -v"""
+"""End-to-end tests for pair.py against throwaway git repos. Run: python3 -m unittest -v"""
 import json
 import os
 import shutil
@@ -11,7 +11,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-DUO = Path(__file__).resolve().parent.parent / "skills/backlog-duo/scripts/duo.py"
+HELPER = Path(__file__).resolve().parent.parent / "skills/pair-with/scripts/pair.py"
 
 FAKE_SSH = """#!/bin/sh
 # Stand-in for ssh: drops options and the host, runs the command locally.
@@ -76,13 +76,13 @@ class Repo:
         self.git("add", ".")
         self.git("commit", "-qm", f"add {slug}")
 
-    def duo(self, *args):
-        proc = subprocess.run(["python3", str(DUO), *args], cwd=self.root, env=self.env,
+    def pair(self, *args):
+        proc = subprocess.run(["python3", str(HELPER), *args], cwd=self.root, env=self.env,
                               capture_output=True, text=True)
         return proc.returncode, json.loads(proc.stdout)
 
     def next(self, agent):
-        return self.duo("next", "--agent", agent)[1]
+        return self.pair("next", "--agent", agent)[1]
 
     def work(self, answer, path="server/a.txt", text="changed\n"):
         tree = Path(answer["worktree"])
@@ -93,7 +93,7 @@ class Repo:
     def do_item(self, agent, path="server/a.txt"):
         answer = self.next(agent)
         self.work(answer, path)
-        code, out = self.duo("submit", answer["item"], "--agent", agent)
+        code, out = self.pair("submit", answer["item"], "--agent", agent)
         assert code == 0, out
         return answer
 
@@ -144,9 +144,9 @@ class Claiming(Base):
         (tree / "web/a.txt").write_text("x\n")
         repo.git("add", ".", cwd=tree)
         repo.git("commit", "-qm", "strays", cwd=tree)
-        code, out = repo.duo("submit", "one", "--agent", "claude")
+        code, out = repo.pair("submit", "one", "--agent", "claude")
         self.assertEqual(out["undeclared"], ["web/a.txt"])
-        repo.duo("next", "--agent", "codex")  # codex now reviews one
+        repo.pair("next", "--agent", "codex")  # codex now reviews one
         self.assertEqual(repo.next("claude")["action"], "wait")
 
     def test_item_without_touches_is_flagged_not_claimed(self):
@@ -174,9 +174,9 @@ class Claiming(Base):
         self.assertIn("second", other["blocked"])
         self.assertIn("typo", other["attention"])
         repo.work(answer)
-        repo.duo("submit", "first", "--agent", "claude")
+        repo.pair("submit", "first", "--agent", "claude")
         self.assertEqual(repo.next("codex")["action"], "review")
-        self.assertEqual(repo.duo("merge", "first", "--agent", "codex")[0], 0)
+        self.assertEqual(repo.pair("merge", "first", "--agent", "codex")[0], 0)
         self.assertEqual(repo.next("claude")["item"], "second")
 
     def test_agent_resumes_what_it_holds(self):
@@ -227,7 +227,7 @@ class Review(Base):
         repo.do_item("claude")
         self.assertEqual(repo.next("claude")["action"], "wait")
         repo.next("codex")
-        self.assertEqual(repo.duo("merge", "one", "--agent", "codex")[0], 0)
+        self.assertEqual(repo.pair("merge", "one", "--agent", "codex")[0], 0)
         self.assertEqual(repo.next("claude")["action"], "stop")
         self.assertEqual(repo.next("codex")["action"], "stop")
 
@@ -246,7 +246,7 @@ class Review(Base):
         repo.item("one")
         repo.do_item("claude")
         repo.next("codex")
-        self.assertEqual(repo.duo("release", "one", "--agent", "codex", "--reason", "x")[0], 0)
+        self.assertEqual(repo.pair("release", "one", "--agent", "codex", "--reason", "x")[0], 0)
         self.assertEqual(repo.next("codex")["action"], "review")
 
     def test_released_work_keeps_its_branch_when_reclaimed(self):
@@ -254,7 +254,7 @@ class Review(Base):
         repo.item("one")
         answer = repo.next("claude")
         repo.work(answer)
-        repo.duo("release", "one", "--agent", "claude", "--reason", "x")
+        repo.pair("release", "one", "--agent", "claude", "--reason", "x")
         again = repo.next("codex")
         self.assertEqual(again["worktree"], answer["worktree"])
         self.assertEqual((Path(again["worktree"]) / "server/a.txt").read_text(), "changed\n")
@@ -265,12 +265,12 @@ class Review(Base):
         repo.item("two", added="2026-01-02")
         repo.do_item("claude")
         repo.next("codex")
-        self.assertEqual(repo.duo("escalate", "one", "--agent", "codex", "--reason", "unclear")[0], 0)
+        self.assertEqual(repo.pair("escalate", "one", "--agent", "codex", "--reason", "unclear")[0], 0)
         answer = repo.next("claude")
         self.assertEqual(answer["action"], "stop")
         self.assertIn("two", answer["blocked"])
-        self.assertEqual(repo.duo("status")[1]["needs_you"], {"one": "unclear"})
-        self.assertEqual(repo.duo("requeue", "one", "--to", "needs_review")[0], 0)
+        self.assertEqual(repo.pair("status")[1]["needs_you"], {"one": "unclear"})
+        self.assertEqual(repo.pair("requeue", "one", "--to", "needs_review")[0], 0)
         self.assertEqual(repo.next("codex")["action"], "review")
 
 
@@ -283,7 +283,7 @@ class Merging(Base):
     def test_merge_lands_on_main_and_removes_item_in_same_commit(self):
         repo = self.repo()
         answer = self.reviewed(repo)
-        code, out = repo.duo("merge", "one", "--agent", "codex")
+        code, out = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 0, out)
         self.assertEqual((repo.root / "server/a.txt").read_text(), "changed\n")
         self.assertFalse((repo.root / "docs/backlog/one.md").exists())
@@ -297,7 +297,7 @@ class Merging(Base):
         (repo.root / "other/a.txt").write_text("my edit\n")
         (repo.root / "notes.md").write_text("mine\n")
         self.reviewed(repo)
-        self.assertEqual(repo.duo("merge", "one", "--agent", "codex")[0], 0)
+        self.assertEqual(repo.pair("merge", "one", "--agent", "codex")[0], 0)
         self.assertEqual((repo.root / "other/a.txt").read_text(), "my edit\n")
         self.assertEqual((repo.root / "notes.md").read_text(), "mine\n")
 
@@ -306,20 +306,20 @@ class Merging(Base):
         self.reviewed(repo)
         (repo.root / "server/a.txt").write_text("user's edit\n")
         before = repo.git("rev-parse", "main")
-        code, out = repo.duo("merge", "one", "--agent", "codex")
+        code, out = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 6, out)
         self.assertEqual(repo.git("rev-parse", "main"), before)
         self.assertEqual((repo.root / "server/a.txt").read_text(), "user's edit\n")
-        self.assertIn("one", repo.duo("status")[1]["needs_you"])
+        self.assertIn("one", repo.pair("status")[1]["needs_you"])
 
     def test_author_and_non_reviewers_cannot_merge(self):
         repo = self.repo()
         repo.item("one")
         repo.do_item("claude")
-        self.assertEqual(repo.duo("merge", "one", "--agent", "claude")[0], 1)
-        self.assertEqual(repo.duo("merge", "one", "--agent", "codex")[0], 1)  # not yet reviewing
+        self.assertEqual(repo.pair("merge", "one", "--agent", "claude")[0], 1)
+        self.assertEqual(repo.pair("merge", "one", "--agent", "codex")[0], 1)  # not yet reviewing
         repo.next("codex")
-        self.assertEqual(repo.duo("merge", "one", "--agent", "claude")[0], 1)
+        self.assertEqual(repo.pair("merge", "one", "--agent", "claude")[0], 1)
 
     def test_failed_check_blocks_merge_then_fix_lands(self):
         repo = self.repo()
@@ -329,18 +329,18 @@ class Merging(Base):
         repo.git("add", ".", cwd=tree)
         repo.git("commit", "-qm", "bad", cwd=tree)
         before = repo.git("rev-parse", "main")
-        code, out = repo.duo("merge", "one", "--agent", "codex")
+        code, out = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 1, out)
         self.assertEqual(out["failed"], "server")
         self.assertEqual(repo.git("rev-parse", "main"), before)
         repo.git("rm", "-q", "server/FAIL", cwd=tree)
         repo.git("commit", "-qm", "fix", cwd=tree)
-        self.assertEqual(repo.duo("merge", "one", "--agent", "codex")[0], 0)
+        self.assertEqual(repo.pair("merge", "one", "--agent", "codex")[0], 0)
 
     def test_files_with_no_check_or_exemption_fail_closed(self):
         repo = self.repo()
         self.reviewed(repo, path="other/a.txt")
-        code, out = repo.duo("merge", "one", "--agent", "codex")
+        code, out = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 1, out)
         self.assertEqual(out["uncovered"], ["other/a.txt"])
 
@@ -351,19 +351,19 @@ class Merging(Base):
         (Path(answer["worktree"]) / "docs/x.md").write_text("x\n")
         repo.git("add", ".", cwd=answer["worktree"])
         repo.git("commit", "-qm", "doc", cwd=answer["worktree"])
-        repo.duo("submit", "one", "--agent", "claude")
+        repo.pair("submit", "one", "--agent", "claude")
         repo.next("codex")
-        self.assertEqual(repo.duo("merge", "one", "--agent", "codex")[0], 0)
+        self.assertEqual(repo.pair("merge", "one", "--agent", "codex")[0], 0)
 
     def test_moved_main_is_rebased_and_rechecked(self):
         repo = self.repo(run="date >> ../../../checks-ran; test ! -e FAIL")
         answer = self.reviewed(repo)
-        self.assertEqual(repo.duo("check", "one", "--agent", "codex")[0], 0)
+        self.assertEqual(repo.pair("check", "one", "--agent", "codex")[0], 0)
         ran = repo.root.parent / "checks-ran"
         (repo.root / "web/a.txt").write_text("from main\n")
         repo.git("add", "web/a.txt")
         repo.git("commit", "-qm", "main moved")
-        self.assertEqual(repo.duo("merge", "one", "--agent", "codex")[0], 0)
+        self.assertEqual(repo.pair("merge", "one", "--agent", "codex")[0], 0)
         self.assertEqual(len(ran.read_text().splitlines()), 2)
         self.assertEqual((repo.root / "web/a.txt").read_text(), "from main\n")
         self.assertEqual((repo.root / "server/a.txt").read_text(), "changed\n")
@@ -373,8 +373,8 @@ class Merging(Base):
     def test_unchanged_code_is_not_rechecked(self):
         repo = self.repo(run="date >> ../../../checks-ran")
         self.reviewed(repo)
-        self.assertEqual(repo.duo("check", "one", "--agent", "codex")[0], 0)
-        self.assertEqual(repo.duo("merge", "one", "--agent", "codex")[0], 0)
+        self.assertEqual(repo.pair("check", "one", "--agent", "codex")[0], 0)
+        self.assertEqual(repo.pair("merge", "one", "--agent", "codex")[0], 0)
         self.assertEqual(len((repo.root.parent / "checks-ran").read_text().splitlines()), 1)
 
     def test_rebase_conflict_reports_and_leaves_branch_for_reviewer(self):
@@ -383,7 +383,7 @@ class Merging(Base):
         (repo.root / "server/a.txt").write_text("conflict\n")
         repo.git("add", ".")
         repo.git("commit", "-qm", "conflict")
-        code, out = repo.duo("merge", "one", "--agent", "codex")
+        code, out = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 5, out)
         self.assertEqual(out["conflicts"], ["server/a.txt"])
         self.assertEqual(repo.git("status", "--porcelain", cwd=answer["worktree"]), "")
@@ -392,11 +392,11 @@ class Merging(Base):
         repo = self.repo()
         answer = self.reviewed(repo)
         (repo.root / "server/a.txt").write_text("user's edit\n")
-        self.assertEqual(repo.duo("merge", "one", "--agent", "codex")[0], 6)
+        self.assertEqual(repo.pair("merge", "one", "--agent", "codex")[0], 6)
         repo.git("checkout", "--", "server/a.txt")
-        repo.duo("requeue", "one", "--to", "needs_review")
+        repo.pair("requeue", "one", "--to", "needs_review")
         repo.next("codex")
-        self.assertEqual(repo.duo("merge", "one", "--agent", "codex")[0], 0)
+        self.assertEqual(repo.pair("merge", "one", "--agent", "codex")[0], 0)
         self.assertFalse(Path(answer["worktree"]).exists())
 
     def test_dirty_worktree_cannot_submit(self):
@@ -405,13 +405,13 @@ class Merging(Base):
         answer = repo.next("claude")
         repo.work(answer)
         (Path(answer["worktree"]) / "server/b.txt").write_text("loose\n")
-        self.assertEqual(repo.duo("submit", "one", "--agent", "claude")[0], 1)
+        self.assertEqual(repo.pair("submit", "one", "--agent", "claude")[0], 1)
 
     def test_submit_with_no_commits_is_refused(self):
         repo = self.repo()
         repo.item("one")
         repo.next("claude")
-        self.assertEqual(repo.duo("submit", "one", "--agent", "claude")[0], 1)
+        self.assertEqual(repo.pair("submit", "one", "--agent", "claude")[0], 1)
 
 
 class CodexFindings(Base):
@@ -428,9 +428,9 @@ class CodexFindings(Base):
         answer = repo.next("claude")
         repo.git("mv", "server/a.txt", "docs/moved.txt", cwd=answer["worktree"])
         repo.git("commit", "-qm", "move", cwd=answer["worktree"])
-        repo.duo("submit", "one", "--agent", "claude")
+        repo.pair("submit", "one", "--agent", "claude")
         repo.next("codex")
-        code, out = repo.duo("merge", "one", "--agent", "codex")
+        code, out = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 0, out)
         self.assertEqual(out["ran"], ["server"])
 
@@ -450,9 +450,9 @@ class CodexFindings(Base):
         settings = repo.root / ".backlog-duo.toml"
         settings.write_text(settings.read_text().replace(
             'no_checks_needed = ["docs/**"]', 'no_checks_needed = ["docs/**", ".env"]'))
-        repo.duo("submit", "one", "--agent", "claude")
+        repo.pair("submit", "one", "--agent", "claude")
         repo.next("codex")
-        code, out = repo.duo("merge", "one", "--agent", "codex")
+        code, out = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 6, out)
         self.assertEqual((repo.root / ".env").read_text(), "my secrets\n")
 
@@ -460,7 +460,7 @@ class CodexFindings(Base):
         repo = self.repo(run="echo generated >> server/a.txt")
         self.reviewed(repo)
         before = repo.git("rev-parse", "main")
-        code, out = repo.duo("merge", "one", "--agent", "codex")
+        code, out = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 1, out)
         self.assertIn("changed files", out["message"])
         self.assertEqual(repo.git("rev-parse", "main"), before)
@@ -468,7 +468,7 @@ class CodexFindings(Base):
     def test_check_that_moves_head_blocks_merge(self):
         repo = self.repo(run="git commit -q --allow-empty -m sneaky")
         self.reviewed(repo)
-        code, out = repo.duo("merge", "one", "--agent", "codex")
+        code, out = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 1, out)
         self.assertIn("moved HEAD", out["message"])
 
@@ -477,7 +477,7 @@ class CodexFindings(Base):
         run = (f"echo start >> {log}; sleep 2; echo end >> {log}")
         repo = self.repo(run=run)
         self.reviewed(repo)
-        first = subprocess.Popen(["python3", str(DUO), "check", "one", "--agent", "codex"],
+        first = subprocess.Popen(["python3", str(HELPER), "check", "one", "--agent", "codex"],
                                  cwd=repo.root, env=repo.env, stdout=subprocess.DEVNULL)
         for _ in range(100):
             if log.exists():
@@ -485,7 +485,7 @@ class CodexFindings(Base):
             time.sleep(0.05)
         first.kill()
         first.wait()
-        code, out = repo.duo("check", "one", "--agent", "codex")
+        code, out = repo.pair("check", "one", "--agent", "codex")
         self.assertEqual(code, 0, out)
         self.assertEqual(log.read_text().split(), ["start", "end", "start", "end"])
 
@@ -493,7 +493,7 @@ class CodexFindings(Base):
         log = Path(self.tmp.name) / "stopped"
         repo = self.repo(run=f"echo start >> {log}; sleep 3; echo end >> {log}")
         self.reviewed(repo)
-        first = subprocess.Popen(["python3", str(DUO), "check", "one", "--agent", "codex"],
+        first = subprocess.Popen(["python3", str(HELPER), "check", "one", "--agent", "codex"],
                                  cwd=repo.root, env=repo.env, stdout=subprocess.DEVNULL)
         for _ in range(100):
             if log.exists():
@@ -513,7 +513,7 @@ class CodexFindings(Base):
         repo.git("commit", "-qm", "short timeout")
         self.reviewed(repo)
         started = time.monotonic()
-        code, out = repo.duo("check", "one", "--agent", "codex")
+        code, out = repo.pair("check", "one", "--agent", "codex")
         self.assertEqual(code, 1, out)
         self.assertLess(time.monotonic() - started, 15)
 
@@ -535,7 +535,7 @@ class CodexFindings(Base):
     def test_retrying_merge_after_interruption_finishes_it(self):
         repo = self.repo()
         answer, sha = self.interrupted_after_fast_forward(repo)
-        code, out = repo.duo("merge", "one", "--agent", "codex")
+        code, out = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 0, out)
         self.assertEqual(out["merged"], sha)
         self.assertTrue(out["already_merged"])
@@ -545,15 +545,15 @@ class CodexFindings(Base):
         repo = self.repo()
         answer, sha = self.interrupted_after_fast_forward(repo)
         self.assertEqual(repo.next("claude")["action"], "stop")
-        self.assertEqual(repo.duo("status")[1]["merged"][0]["sha"], sha)
+        self.assertEqual(repo.pair("status")[1]["merged"][0]["sha"], sha)
         self.assertFalse(Path(answer["worktree"]).exists())
 
     def test_merge_retry_after_success_reports_success(self):
         repo = self.repo()
         self.reviewed(repo)
-        code, first = repo.duo("merge", "one", "--agent", "codex")
+        code, first = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 0, first)
-        code, second = repo.duo("merge", "one", "--agent", "codex")
+        code, second = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 0, second)
         self.assertEqual(second["merged"], first["merged"])
 
@@ -561,7 +561,7 @@ class CodexFindings(Base):
         repo = self.repo()
         answer = self.reviewed(repo)
         repo.git("rm", "-q", "docs/backlog/one.md", cwd=answer["worktree"])
-        self.assertEqual(repo.duo("merge", "one", "--agent", "codex")[0], 0)
+        self.assertEqual(repo.pair("merge", "one", "--agent", "codex")[0], 0)
 
     def test_unfinished_rebase_is_reported_not_trampled(self):
         repo = self.repo()
@@ -571,7 +571,7 @@ class CodexFindings(Base):
         repo.git("commit", "-qm", "conflict")
         subprocess.run(["git", "rebase", "main"], cwd=answer["worktree"], env=repo.env,
                        capture_output=True)
-        code, out = repo.duo("merge", "one", "--agent", "codex")
+        code, out = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 5, out)
         self.assertIn("rebase is in progress", out["message"])
 
@@ -582,7 +582,7 @@ class CodexFindings(Base):
         repo.git("rm", "-q", "docs/backlog/one.md")
         repo.git("commit", "-qm", "withdraw")
         self.assertEqual(repo.next("claude")["action"], "stop")
-        self.assertIn("removed from main", repo.duo("status")[1]["needs_you"]["one"])
+        self.assertIn("removed from main", repo.pair("status")[1]["needs_you"]["one"])
         self.assertTrue(Path(answer["worktree"]).exists())
 
     def test_deleted_branch_goes_to_user(self):
@@ -592,7 +592,7 @@ class CodexFindings(Base):
         repo.git("worktree", "remove", answer["worktree"])
         repo.git("branch", "-D", "duo/one")
         self.assertEqual(repo.next("claude")["action"], "stop")
-        self.assertIn("no longer exists", repo.duo("status")[1]["needs_you"]["one"])
+        self.assertIn("no longer exists", repo.pair("status")[1]["needs_you"]["one"])
 
     def test_deleted_worktree_is_recreated_from_branch(self):
         repo = self.repo()
@@ -607,7 +607,7 @@ class CodexFindings(Base):
     def test_switching_branch_during_checks_lands_on_main_only(self):
         repo = self.repo(run="git -C ../.. checkout -q -b elsewhere")
         self.reviewed(repo)
-        code, out = repo.duo("merge", "one", "--agent", "codex")
+        code, out = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 0, out)
         self.assertEqual(repo.git("symbolic-ref", "--short", "HEAD"), "elsewhere")
         self.assertEqual(repo.git("rev-parse", "main"), out["merged"])
@@ -616,17 +616,17 @@ class CodexFindings(Base):
     def test_duplicate_check_names_are_refused(self):
         repo = self.repo(extra='\n[[checks]]\nname = "server"\nwhen = ["web/**"]\nrun = "false"\n')
         repo.item("one")
-        code, out = repo.duo("next", "--agent", "claude")
+        code, out = repo.pair("next", "--agent", "claude")
         self.assertEqual(code, 2, out)
         self.assertIn("unique", out["message"])
 
     def test_changed_check_command_invalidates_earlier_pass(self):
         repo = self.repo(run="true")
         self.reviewed(repo)
-        self.assertEqual(repo.duo("check", "one", "--agent", "codex")[0], 0)
+        self.assertEqual(repo.pair("check", "one", "--agent", "codex")[0], 0)
         settings = repo.root / ".backlog-duo.toml"
         settings.write_text(settings.read_text().replace('run = "true"', 'run = "false"'))
-        code, out = repo.duo("check", "one", "--agent", "codex")
+        code, out = repo.pair("check", "one", "--agent", "codex")
         self.assertEqual(code, 1, out)
         self.assertEqual(out["failed"], "server")
 
@@ -636,17 +636,17 @@ class CodexFindings(Base):
         git_dir = repo.root / ".git"
         git_dir.chmod(0o555)
         self.addCleanup(git_dir.chmod, 0o755)
-        code, out = repo.duo("doctor")
+        code, out = repo.pair("doctor")
         self.assertEqual(code, 2, out)
         self.assertTrue(any("cannot write" in p for p in out["problems"]), out)
-        code, out = repo.duo("next", "--agent", "claude")
+        code, out = repo.pair("next", "--agent", "claude")
         self.assertEqual(code, 2, out)
         self.assertIn("sandbox", out["message"])
 
     def test_doctor_changes_nothing(self):
         repo = self.repo()
         repo.item("one")
-        repo.duo("doctor")
+        repo.pair("doctor")
         self.assertFalse((repo.root / ".git/backlog-duo").exists())
 
 
@@ -656,21 +656,21 @@ class Intake(Base):
         repo.item("core", touches="server/**", issue="22", added="2026-01-01")
         repo.item("web", touches="web/**", issue="22", added="2026-01-02", depends="core")
         repo.item("unrelated", touches="other/**", worth="later")
-        self.assertEqual(repo.duo("status")[1]["issues"],
+        self.assertEqual(repo.pair("status")[1]["issues"],
                          {"22": {"merged": [], "remaining": ["core", "web"], "complete": False}})
         answer = repo.do_item("claude")
         self.assertEqual(answer["issue"], "22")
         repo.next("codex")
-        self.assertEqual(repo.duo("merge", "core", "--agent", "codex")[0], 0)
-        self.assertEqual(repo.duo("status")[1]["issues"],
+        self.assertEqual(repo.pair("merge", "core", "--agent", "codex")[0], 0)
+        self.assertEqual(repo.pair("status")[1]["issues"],
                          {"22": {"merged": ["core"], "remaining": ["web"], "complete": False}})
         answer = repo.next("claude")
         self.assertEqual(answer["item"], "web")
         repo.work(answer, "web/a.txt")
-        repo.duo("submit", "web", "--agent", "claude")
+        repo.pair("submit", "web", "--agent", "claude")
         repo.next("codex")
-        self.assertEqual(repo.duo("merge", "web", "--agent", "codex")[0], 0)
-        self.assertEqual(repo.duo("status")[1]["issues"],
+        self.assertEqual(repo.pair("merge", "web", "--agent", "codex")[0], 0)
+        self.assertEqual(repo.pair("status")[1]["issues"],
                          {"22": {"merged": ["core", "web"], "remaining": [], "complete": True}})
 
     def test_escalated_item_keeps_its_issue_incomplete(self):
@@ -678,8 +678,8 @@ class Intake(Base):
         repo.item("core", issue="22")
         repo.do_item("claude")
         repo.next("codex")
-        repo.duo("escalate", "core", "--agent", "codex", "--reason", "unclear")
-        self.assertFalse(repo.duo("status")[1]["issues"]["22"]["complete"])
+        repo.pair("escalate", "core", "--agent", "codex", "--reason", "unclear")
+        self.assertFalse(repo.pair("status")[1]["issues"]["22"]["complete"])
 
     def test_brief_beside_items_is_not_treated_as_an_item(self):
         repo = self.repo()
@@ -689,10 +689,10 @@ class Intake(Base):
         (briefs / "22-thing.md").write_text("# Brief\n")
         repo.git("add", ".")
         repo.git("commit", "-qm", "brief")
-        self.assertEqual(repo.duo("status")[1]["open"], ["core"])
+        self.assertEqual(repo.pair("status")[1]["open"], ["core"])
         answer = repo.do_item("claude")
         repo.next("codex")
-        self.assertEqual(repo.duo("merge", answer["item"], "--agent", "codex")[0], 0)
+        self.assertEqual(repo.pair("merge", answer["item"], "--agent", "codex")[0], 0)
         self.assertTrue((repo.root / "docs/backlog/briefs/22-thing.md").exists())
 
 
@@ -732,13 +732,13 @@ class Machines(Base):
     def test_setup_refuses_to_take_over_existing_folder(self):
         repo = self.machine_repo()
         self.checkout.mkdir()
-        self.assertEqual(repo.duo("setup-machine", "mac")[0], 2)
+        self.assertEqual(repo.pair("setup-machine", "mac")[0], 2)
 
     def test_machine_check_runs_remotely_then_merges(self):
         repo = self.machine_repo()
-        self.assertEqual(repo.duo("setup-machine", "mac")[0], 0)
+        self.assertEqual(repo.pair("setup-machine", "mac")[0], 0)
         self.reviewed(repo)
-        code, out = repo.duo("merge", "one", "--agent", "codex")
+        code, out = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 0, out)
         self.assertEqual(out["ran"], ["ios"])
         self.assertTrue((self.checkout / "ran-here").exists())
@@ -746,58 +746,58 @@ class Machines(Base):
     def test_machine_not_set_up_is_refused(self):
         repo = self.machine_repo()
         self.reviewed(repo)
-        code, out = repo.duo("merge", "one", "--agent", "codex")
+        code, out = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 2, out)
 
     def test_unavailable_machine_holds_item_and_other_work_continues(self):
         repo = self.machine_repo()
-        repo.duo("setup-machine", "mac")
+        repo.pair("setup-machine", "mac")
         self.reviewed(repo)
         before = repo.git("rev-parse", "main")
         repo.item("two", touches="web/**")
         repo.env["FAKE_SSH_DOWN"] = "1"
-        code, out = repo.duo("merge", "one", "--agent", "codex")
+        code, out = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 3, out)
         self.assertEqual(out["item_now"], "held")
         self.assertEqual(repo.git("log", "-1", "--format=%s", "main"), "add two")
         self.assertNotEqual(before, "")
         answer = repo.next("codex")
         self.assertEqual((answer["action"], answer["item"]), ("implement", "two"))
-        self.assertIn("one", repo.duo("status")[1]["held"])
+        self.assertIn("one", repo.pair("status")[1]["held"])
 
     def test_live_run_on_machine_blocks_reset_of_its_checkout(self):
         repo = self.machine_repo()
-        repo.duo("setup-machine", "mac")
+        repo.pair("setup-machine", "mac")
         self.reviewed(repo)
         sleeper = subprocess.Popen(["sleep", "30"])
         self.addCleanup(sleeper.wait)
         self.addCleanup(sleeper.kill)
         (self.checkout / ".git/backlog-duo-run.pid").write_text(str(sleeper.pid))
-        code, out = repo.duo("merge", "one", "--agent", "codex")
+        code, out = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 3, out)
         self.assertIn("still going", out["message"])
         self.assertFalse((self.checkout / "other").exists())
 
     def test_stale_pid_file_does_not_block_the_machine(self):
         repo = self.machine_repo()
-        repo.duo("setup-machine", "mac")
+        repo.pair("setup-machine", "mac")
         self.reviewed(repo)
         sleeper = subprocess.Popen(["true"])
         sleeper.wait()
         (self.checkout / ".git/backlog-duo-run.pid").write_text(str(sleeper.pid))
-        self.assertEqual(repo.duo("merge", "one", "--agent", "codex")[0], 0)
+        self.assertEqual(repo.pair("merge", "one", "--agent", "codex")[0], 0)
         self.assertFalse((self.checkout / ".git/backlog-duo-run.pid").exists())
 
     def test_low_disk_goes_to_user_and_never_merges(self):
         repo = self.machine_repo(min_free=10**9)
-        repo.duo("setup-machine", "mac")
+        repo.pair("setup-machine", "mac")
         self.reviewed(repo)
         before = repo.git("rev-parse", "main")
-        code, out = repo.duo("merge", "one", "--agent", "codex")
+        code, out = repo.pair("merge", "one", "--agent", "codex")
         self.assertEqual(code, 4, out)
         self.assertEqual(out["item_now"], "needs_you")
         self.assertEqual(repo.git("rev-parse", "main"), before)
-        self.assertIn("one", repo.duo("status")[1]["needs_you"])
+        self.assertIn("one", repo.pair("status")[1]["needs_you"])
 
 
 if __name__ == "__main__":

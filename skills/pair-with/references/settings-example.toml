@@ -12,7 +12,7 @@ push_after_merge = false   # true pushes main to origin after every merge.
 # exemption covers blocks the merge. Patterns: '*' also crosses '/'.
 no_checks_needed = ["docs/**", "*.md"]
 
-# Shown to both agents with every item. Not enforced by duo.py.
+# Shown to both agents with every item. Not enforced by pair.py.
 off_limits = [
   "Don't run kubectl or anything under deploy/.",
   "Don't add release records to the docs.",
@@ -33,11 +33,19 @@ args = ["-m", "gpt-6.1-sol",  # or "gpt-6-astra"
         "-c", "sandbox_workspace_write.network_access=true"]
 
 # A remote test machine runs one check at a time. Create its checkout once with
-# `duo.py setup-machine mac`. It's dedicated: every run resets it to the tested commit.
+# `pair.py setup-machine mac`. It's dedicated: every run resets it to the tested commit.
 [machines.mac]
 ssh = "maris@192.168.0.111"
 checkout = "~/Projects/weat-duo"
 min_free_gb = 3            # Below this the item goes to you. Nothing gets deleted.
+
+# Keep merges quick: run the slow full suite only when a milestone is done. Point its
+# `when` at a file only the milestone's closing item changes, and list any paths nothing
+# else covers in no_checks_needed. For example:
+#   [[checks]]
+#   name = "full"
+#   when = ["scripts/full-suite.sh"]
+#   run = "./scripts/full-suite.sh"
 
 [[checks]]
 name = "server"

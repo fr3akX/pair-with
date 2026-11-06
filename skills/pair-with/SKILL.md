@@ -1,40 +1,53 @@
 ---
-name: backlog-duo
-description: Use when two coding agents should work through a repo's backlog or a GitHub issue in parallel without duplicating work, when the user says "backlog duo", "run the duo", "work the backlog in parallel", or "run the duo on issue N", or when an agent has been started to join a backlog-duo run under a given agent name.
+name: pair-with
+description: Use when the user says "pair with codex" or "pair with claude", with or without a model and effort such as "pair with codex astra high", or "pair on issue N" or "work the backlog in parallel", when two coding agents should work through a repo's backlog or a GitHub issue in parallel without duplicating work, or when an agent has been started to join a pair run under a given agent name.
 ---
 
-# Backlog Duo
+# Pair
 
 Two agents share one backlog. Each builds items, and each reviews what the other built. The reviewer fixes what it finds and merges; it never hands a review back. Vague work is settled with the user and split into items first, before the second agent starts.
 
-`scripts/duo.py` (next to this file) owns all shared state. Run it as `python3 <this skill's directory>/scripts/duo.py <command>` from anywhere inside the repo. It prints JSON. Trust its answers over your own reading of the repo.
+`scripts/pair.py` (next to this file) owns all shared state. Run it as `python3 <this skill's directory>/scripts/pair.py <command>` from anywhere inside the repo. It prints JSON. Trust its answers over your own reading of the repo.
 
-**Running this skill is the user's permission to work backlog items, commit on `duo/*` branches, and merge to the main branch through `duo.py merge`.** It covers nothing else, and it overrides the "don't fix without being asked" and "never auto-commit" rules of other backlog skills for this run only.
+**Running this skill is the user's permission to work backlog items, commit on `duo/*` branches, and merge to the main branch through `pair.py merge`.** It covers nothing else, and it overrides the "don't fix without being asked" and "never auto-commit" rules of other backlog skills for this run only.
 
 ## Off limits
 
-- Deploying, recording a release, or pushing to a remote yourself. `duo.py merge` pushes only if the repo's settings say so.
+- Deploying, recording a release, or pushing to a remote yourself. `pair.py merge` pushes only if the repo's settings say so.
 - Deleting anything outside your task's worktree, including on test machines.
-- Merging any way other than `duo.py merge`, or editing `main` directly.
-- Working on an item `duo.py next` did not give you.
+- Merging any way other than `pair.py merge`, or editing `main` directly.
+- Working on an item `pair.py next` did not give you.
 - Everything listed in `off_limits` in the JSON from `next`. Follow `repo_notes` from the same JSON.
 
 ## Starting a run
 
 You are the first agent unless your prompt names you as joining a run.
 
-1. Run `duo.py doctor`. If it reports no settings file, do **First-time setup**, then run it again.
+1. Run `pair.py doctor`. If it reports no settings file, do **First-time setup**, then run it again.
 2. If `doctor` reports `problems`, show them to the user and stop. Show `warnings` too, then continue. If it reports it can't write to the git directory, see **Permissions**.
-3. If the user named an issue or described work that has no items yet, do **Turning an issue into items**, then run `doctor` again. If they named an outcome with no fixed end, such as reaching parity, also do **Running toward a goal**.
-4. Your agent name is the settings key whose `kind` matches you (`claude` or `codex`).
-5. Start the other agent. If `HERDR_ENV` isn't `1`, stop and tell the user this skill must be started inside a herdr pane.
+3. If the user named an issue or described work that has no items yet, do **Turning an issue into items**, then run `doctor` again. If they named an outcome with no fixed end, such as reaching parity, also do **Running toward a goal**. If they named no work and the backlog has no items, ask what to work on.
+4. Your agent name is the settings key whose `kind` matches you (`claude` or `codex`). If the user asked to pair with your own kind, tell them a run needs one of each, and stop.
+5. Start the other agent, using the args from **Choosing the other agent**. If `HERDR_ENV` isn't `1`, stop and tell the user this skill must be started inside a herdr pane.
    ```bash
    pane=$(herdr pane split --current --direction right --cwd "$PWD" --no-focus | jq -r .result.pane.pane_id)
-   herdr agent start duo-<name> --kind <kind> --pane "$pane" --timeout 120000 -- <args from settings>
-   herdr agent prompt duo-<name> "Use the backlog-duo skill. You are joining a run as agent '<name>'. Go straight to The loop."
+   herdr agent start pair-<name> --kind <kind> --pane "$pane" --timeout 120000 -- <args>
+   herdr agent prompt pair-<name> "Use the pair-with skill. You are joining a run as agent '<name>'. Go straight to The loop."
    ```
    Don't pass `--wait` to the prompt: you start working straight away too. If the other agent can't start, stop and tell the user.
 6. Go to **The loop**.
+
+## Choosing the other agent
+
+The user can name a model and effort for the other agent: `pair with <kind> [model] [effort]`, such as `pair with codex astra high` or `pair with claude opus max`. Start from that agent's `args` in the settings, then apply what they named. Replace a flag that's already there; never add a second one.
+
+| They said | Codex | Claude |
+|---|---|---|
+| `low`, `medium`, `high`, `xhigh` or `max` | `-c model_reasoning_effort="<level>"` | `--effort <level>` |
+| `astra` | `-m gpt-6-astra` | |
+| `sol` | `-m gpt-6.1-sol` | |
+| any other word | `-m <word>` | `--model <word>` |
+
+What they didn't name stays as the settings have it. This applies to this run only, so don't edit the settings.
 
 ## Turning an issue into items
 
@@ -83,7 +96,7 @@ A goal never widens what's off limits. Deploying, pushing and anything else rese
 Make these drafts and get the user's approval before committing or running anything:
 
 1. **`.backlog-duo.toml`** at the repo root. Copy the shape from `references/settings-example.toml`. Fill it from the repo's own docs and scripts. Run each check command once on the main branch to confirm it passes unattended, leaves the worktree unchanged, and how long it takes. Look for files one part of the repo generates from another, such as schemas and contracts, and make sure a change to the source file triggers every check that depends on it.
-2. **`docs/backlog/`** items, one file each. Add a test machine with `duo.py setup-machine <name>` only after the user approves it; it creates a dedicated checkout on that machine.
+2. **`docs/backlog/`** items, one file each. Add a test machine with `pair.py setup-machine <name>` only after the user approves it; it creates a dedicated checkout on that machine.
 
 The user commits both to the main branch, or tells you to. Items not committed to the main branch are invisible to the run.
 
@@ -110,7 +123,7 @@ Only `worth: yes` items run. `touches` is required: it's how overlap is judged, 
 Repeat until `next` says stop:
 
 ```bash
-duo.py next --agent <name> --wait-seconds 240
+pair.py next --agent <name> --wait-seconds 240
 ```
 
 | `action` | Do this |
@@ -140,8 +153,8 @@ An approval prompt pauses an agent until the user answers in its pane.
 
 1. Work only in `worktree`. Read `file` from the main branch, and the brief if it names one. The brief's decisions are settled: follow them.
 2. Build it, with tests, following the repo's conventions. Commit on the branch.
-3. Test what you changed; see **Testing while you work**. The full checks run at merge, so don't run `duo.py check` before submitting, with one exception: if your change can only be tested on a test machine, run `duo.py check <item> --agent <name>` and fix failures. There, exit 3 (machine unavailable) doesn't block you: submit anyway, since the merge can't pass without that check. Exit 4 sends the item to the user: go back to the loop. If `uncovered` is listed, or the exit is 2, escalate.
-4. Run `duo.py submit <item> --agent <name>`. Mention any `undeclared` files in your summary, then return to the loop.
+3. Test what you changed; see **Testing while you work**. The checks run at merge, so don't run `pair.py check` before submitting, with one exception: if your change can only be tested on a test machine, run `pair.py check <item> --agent <name>` and fix failures. There, exit 3 (machine unavailable) doesn't block you: submit anyway, since the merge can't pass without that check. Exit 4 sends the item to the user: go back to the loop. If `uncovered` is listed, or the exit is 2, escalate.
+4. Run `pair.py submit <item> --agent <name>`. Mention any `undeclared` files in your summary, then return to the loop.
 
 After submitting, the item isn't yours. Don't touch that branch again.
 
@@ -151,7 +164,7 @@ You now own this branch, in `worktree`. The author has moved on and will not rea
 
 1. Read `file`, its brief if it names one, then the whole diff against the main branch. Check it against what the item and brief asked for. Look for wrong behavior, missing cases, missing tests, and changes the item didn't ask for.
 2. Fix every real problem yourself and commit on the branch, testing your fixes as described in **Testing while you work**. Leave matters of taste alone: a different style isn't a problem, and neither is code you'd merely have written differently.
-3. Run `duo.py merge <item> --agent <name>`. It rebases, runs the full checks unless that exact code already passed them, and lands the work. Exit codes:
+3. Run `pair.py merge <item> --agent <name>`. It rebases, runs the checks the change triggers unless that exact code already passed them, and lands the work. Exit codes:
 
 | Exit | Meaning | Do this |
 |---|---|---|
@@ -182,17 +195,18 @@ Escalate only when one of these is true:
 - A check can't be made to pass after a real attempt.
 
 ```bash
-duo.py escalate <item> --agent <name> --reason "<what the user must decide>"
+pair.py escalate <item> --agent <name> --reason "<what the user must decide>"
 ```
 
 Then return to the loop. Never send problems back to the other agent, wait for it to fix them, or ask it to redo work.
 
 ## Testing while you work
 
-While building or fixing, run only the tests for what you changed. Use the command `repo_notes` names for running tests, if it names one.
+While building, fixing or reviewing, run the smallest set of tests that covers what you changed. Use the command `repo_notes` names for running tests, if it names one. After a small fix, rerun only what that fix affects.
 
 - A run that reports no tests, or fewer than it should, is not a pass.
-- `duo.py merge` is the gate. It runs every check the change triggers, in full. Run it with nothing that narrows what a check covers, including environment variables, filters and edits to the settings.
+- `pair.py merge` is the gate. It runs every check the change triggers, in full. Run it with nothing that narrows what a check covers, including environment variables, filters and edits to the settings.
+- The full suite runs when a milestone is done, not on every merge, so a slow check is triggered only by the item that closes a milestone. If that check fails, fix it in that item, whichever earlier item caused it.
 
 ## Long commands
 
@@ -202,7 +216,7 @@ A check must leave the worktree unchanged. If `check` or `merge` says a check ch
 
 ## Finishing
 
-When `next` says stop, run `duo.py status` and report to the user: what merged, each `needs_you` item and the decision it needs, each `held` item, each `attention` item, and anything still `active`. For each entry in `issues`, say whether it's `complete` or what remains, and list the work its brief leaves for the user. A complete issue still needs the user to push and close it. Stop there. The other agent reports on its own.
+When `next` says stop, run `pair.py status` and report to the user: what merged, each `needs_you` item and the decision it needs, each `held` item, each `attention` item, and anything still `active`. For each entry in `issues`, say whether it's `complete` or what remains, and list the work its brief leaves for the user. A complete issue still needs the user to push and close it. Stop there. The other agent reports on its own.
 
 ## Red flags
 
@@ -218,5 +232,5 @@ When `next` says stop, run `duo.py status` and report to the user: what merged, 
 | "This failing check is unrelated to the change" | The merge will still refuse. Fix it or escalate |
 | "I'll run the full check before submitting, to be safe" | The merge runs it. Test what you changed and submit |
 | "I'll narrow the check so this merge goes faster" | Never. Narrow your own test runs, not the gate |
-| "A small direct commit to main is fine" | Only `duo.py merge` lands work |
+| "A small direct commit to main is fine" | Only `pair.py merge` lands work |
 | "The Mac needs disk space, I'll clear old builds" | Delete nothing. Low disk goes to the user |

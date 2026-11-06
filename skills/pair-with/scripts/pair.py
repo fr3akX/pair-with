@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Coordination helper for the backlog-duo skill. Python 3.11+, stdlib only.
+"""Coordination helper for the pair-with skill. Python 3.11+, stdlib only.
 
 Every command prints one JSON object on stdout.
 
@@ -34,6 +34,7 @@ import tomllib
 from pathlib import Path
 
 BACKLOG_DIR = "docs/backlog"
+# These keep the skill's old name so existing repos and their runs keep working.
 SETTINGS_FILE = ".backlog-duo.toml"
 WORKTREE_DIR = ".backlog-duo-worktrees"
 REMOTE_REF = "refs/heads/backlog-duo-test"
@@ -909,7 +910,7 @@ def cmd_setup_machine(ctx, args):
     )
     proc = ssh(machine["ssh"], script, timeout=30)
     if proc.returncode == 3:
-        raise Refused(f"{machine['checkout']} exists and is not a backlog-duo checkout", code=2)
+        raise Refused(f"{machine['checkout']} exists and is not a pair checkout", code=2)
     if proc.returncode:
         raise Refused(f"setup failed: {proc.stderr.strip()}", code=3)
     emit({"ok": True, "machine": args.name, "checkout": machine["checkout"]})
