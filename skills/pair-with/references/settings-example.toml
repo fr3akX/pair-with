@@ -12,6 +12,9 @@ push_after_merge = false   # true pushes main to origin after every merge.
 # exemption covers blocks the merge. Patterns: '*' also crosses '/'.
 no_checks_needed = ["docs/**", "*.md"]
 
+# Left out of the line counts in `pair.py report`, such as generated data. Optional.
+report_exclude = ["data/**"]
+
 # Shown to both agents with every item. Not enforced by pair.py.
 off_limits = [
   "Don't run kubectl or anything under deploy/.",
@@ -31,6 +34,11 @@ args = ["-m", "gpt-6.1-sol",  # or "gpt-6-astra"
         "--sandbox", "workspace-write",
         "-c", 'sandbox_workspace_write.writable_roots=["/home/maris/projects/weat/.git"]',
         "-c", "sandbox_workspace_write.network_access=true"]
+
+# Optional. Used only when the user asks for a watched run. The watch is always Claude.
+[watch]
+args = ["--model", "sonnet"]
+every_minutes = 60
 
 # A remote test machine runs one check at a time. Create its checkout once with
 # `pair.py setup-machine mac`. It's dedicated: every run resets it to the tested commit.

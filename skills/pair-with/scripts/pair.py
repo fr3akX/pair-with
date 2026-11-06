@@ -14,7 +14,8 @@ Exit codes:
   7  an earlier run of this command is still going: try again later
 
 Live state lives in <git common dir>/backlog-duo/, never in tracked files, so
-claiming an item needs no commit and survives across worktrees.
+claiming an item needs no commit and survives across worktrees. What happened, and
+when, is appended to events.jsonl there; `report` summarizes it.
 """
 import argparse
 import contextlib
@@ -205,6 +206,53 @@ def state(ctx):
         os.replace(tmp, path)
 
 
+def log_event(ctx, event, **fields):
+    """Append one event to the run's history. History is best effort: it never blocks work."""
+    with contextlib.suppress(OSError):
+        ctx.ensure_dirs()
+        with open(ctx.state_dir / "events.jsonl", "a") as out:
+            out.write(json.dumps({"at": time.time(), "event": event, **fields}) + "\n")
+
+
+def excluded_from_report(ctx, path):
+    return any(path_matches(path, p) for p in ctx.settings.get("report_exclude", []))
+
+
+def work_stats(ctx, cwd, diff_args, commits):
+    """Commits and changed lines, leaving out binary files and report_exclude paths."""
+    files = lines = 0
+    for row in git("diff", "--no-renames", "--numstat", *diff_args, cwd=cwd).splitlines():
+        added, deleted, path = row.split("\t", 2)
+        if added == "-" or excluded_from_report(ctx, path):
+            continue
+        files += 1
+        lines += int(added) + int(deleted)
+    return {"commits": commits, "files": files, "lines": lines}
+
+
+def author_work(ctx, branch):
+    commits = int(git("rev-list", "--count", f"{ctx.main}..{branch}", cwd=ctx.root))
+    return work_stats(ctx, ctx.root, [f"{ctx.main}...{branch}"], commits)
+
+
+def review_work(ctx, item, worktree):
+    """What the reviewer changed since it took the item over."""
+    base = item.get("review_base")
+    if not base or not git_ok("cat-file", "-e", f"{base}^{{commit}}", cwd=worktree):
+        return None
+    if git_ok("merge-base", "--is-ancestor", base, "HEAD", cwd=worktree):
+        commits = int(git("rev-list", "--count", f"{base}..HEAD", cwd=worktree))
+        return work_stats(ctx, worktree, [base, "HEAD"], commits)
+    # The reviewer rebased, so main's changes are in the range too. Count only the
+    # branch's own files; that's close, not exact.
+    paths = git("diff", "--no-renames", "--name-only", f"{ctx.main}...HEAD", cwd=worktree).splitlines()
+    total = int(git("rev-list", "--count", f"{ctx.main}..HEAD", cwd=worktree))
+    authored = (item.get("author_work") or {}).get("commits", 0)
+    if not paths:
+        return {"commits": max(0, total - authored), "files": 0, "lines": 0}
+    return work_stats(ctx, worktree, [base, "HEAD", "--", *paths], max(0, total - authored))
+
+
 def split_list(value):
     return [part.strip() for part in value.split(",") if part.strip()]
 
@@ -278,7 +326,13 @@ def finish_merge(ctx, st, slug, sha):
     st["merged"].append({"item": slug, "sha": sha, "author": item["author"],
                          "reviewer": item.get("reviewer"), "issue": item.get("issue"),
                          "at": time.time(),
+                         "claimed_at": item.get("claimed_at"),
+                         "submitted_at": item.get("submitted_at"),
+                         "review_started_at": item.get("review_started_at"),
+                         "author_work": item.get("author_work"),
+                         "review_work": item.get("review_work"),
                          "warnings": warnings})
+    log_event(ctx, "merge", item=slug, author=item["author"], reviewer=item.get("reviewer"), sha=sha)
 
 
 def reconcile(ctx, st):
@@ -362,8 +416,15 @@ def choose_next(ctx, agent, st):
     ]
     if waiting:
         slug = min(waiting)[1]
-        items[slug].update(status="reviewing", reviewer=agent)
-        return item_view(ctx, slug, items[slug], "review")
+        item = items[slug]
+        item.update(status="reviewing", reviewer=agent)
+        if "review_base" not in item:
+            # The first review start fixes what the author built, for the report.
+            item["review_base"] = git("rev-parse", f"refs/heads/{item['branch']}", cwd=ctx.root)
+            item["author_work"] = author_work(ctx, item["branch"])
+            item["review_started_at"] = now
+        log_event(ctx, "review", item=slug, agent=agent, author=item["author"])
+        return item_view(ctx, slug, item, "review")
 
     on_main = read_backlog(ctx)
     attention, blocked = {}, {}
@@ -404,12 +465,11 @@ def choose_next(ctx, agent, st):
             "checks": {},
             "claimed_at": now,
         }
-        st["waiting_since"].pop(agent, None)
+        log_event(ctx, "claim", item=slug, agent=agent)
         return item_view(ctx, slug, items[slug], "implement")
 
     busy = [i for i in items.values() if i["status"] in ACTIVE]
     if not busy:
-        st["waiting_since"].pop(agent, None)
         return {"action": "stop", "reason": "nothing left to claim or review",
                 "blocked": blocked, "attention": attention}
     since = st["waiting_since"].setdefault(agent, now)
@@ -426,7 +486,10 @@ def cmd_next(ctx, args):
         with state(ctx) as st:
             answer = choose_next(ctx, args.agent, st)
             if answer["action"] != "wait":
-                st["waiting_since"].pop(args.agent, None)
+                since = st["waiting_since"].pop(args.agent, None)
+                if since:
+                    log_event(ctx, "wait", agent=args.agent, seconds=round(time.time() - since),
+                           ended=answer["action"])
         if answer["action"] != "wait" or time.monotonic() >= deadline:
             emit(answer)
         time.sleep(min(POLL_SECONDS, max(0.1, deadline - time.monotonic())))
@@ -463,6 +526,7 @@ def cmd_submit(ctx, args):
         changed = changed_files(ctx, item["branch"])
         undeclared = [p for p in changed if not any(path_matches(p, t) for t in item["touches"])]
         item.update(status="needs_review", changed=changed, submitted_at=time.time())
+    log_event(ctx, "submit", item=args.slug, agent=args.agent, files=len(changed))
     emit({"ok": True, "item": args.slug, "changed": changed, "undeclared": undeclared})
 
 
@@ -479,6 +543,7 @@ def cmd_release(ctx, args):
             result = "open"
         else:
             raise Refused(f"{args.slug} is {item['status']}; not releasable by you")
+    log_event(ctx, "release", item=args.slug, agent=args.agent, now=result, reason=args.reason)
     emit({"ok": True, "item": args.slug, "now": result, "reason": args.reason})
 
 
@@ -489,6 +554,7 @@ def cmd_escalate(ctx, args):
         if args.agent not in (item["author"], item["reviewer"]):
             raise Refused(f"{args.agent} does not hold {args.slug}")
         item.update(status="needs_you", reason=args.reason, reviewer=None)
+    log_event(ctx, "escalate", item=args.slug, agent=args.agent, reason=args.reason)
     emit({"ok": True, "item": args.slug, "reason": args.reason})
 
 
@@ -504,6 +570,7 @@ def cmd_requeue(ctx, args):
             item.update(status="needs_review", reviewer=None, hold_until=0,
                         submitted_at=time.time())
             item.pop("reason", None)
+    log_event(ctx, "requeue", item=args.slug, now=args.to)
     emit({"ok": True, "item": args.slug, "now": args.to})
 
 
@@ -642,7 +709,7 @@ def changed_by_check(worktree, sha):
     return None
 
 
-def run_checks(ctx, slug, item):
+def run_checks(ctx, slug, item, agent=None):
     """Return (exit_code, report). Fails closed on files no check or exemption covers."""
     worktree = item["worktree"]
     sha = git("rev-parse", "HEAD", cwd=worktree)
@@ -669,11 +736,14 @@ def run_checks(ctx, slug, item):
             report["skipped"].append(name)
             continue
         log = ctx.state_dir / "logs" / f"{slug}-{name}.log"
+        started = time.time()
         if check.get("machine"):
             code, message = run_machine_check(ctx, check, worktree, sha, log)
         else:
             code = run_local_check(check, worktree, log)
             code, message = (0, "") if code == 0 else (1, f"check exited {code}")
+        log_event(ctx, "check", item=slug, agent=agent, check=name, exit=code,
+               seconds=round(time.time() - started))
         report["ran"].append(name)
         if code:
             report.update(ok=False, failed=name, message=message, log=str(log))
@@ -712,9 +782,11 @@ def apply_check_failure(ctx, slug, code, reason):
         if code == 3 and item["status"] == "reviewing":
             item.update(status="needs_review", reviewer=None, hold_until=time.time() + HOLD_SECONDS,
                         hold_reason=reason)
+            log_event(ctx, "held", item=slug, reason=reason)
             return "held"
         if code == 4:
             item.update(status="needs_you", reason=reason, reviewer=None)
+            log_event(ctx, "needs_you", item=slug, reason=reason)
             return "needs_you"
     return "unchanged"
 
@@ -736,7 +808,7 @@ def cmd_check(ctx, args):
         item = json.loads(json.dumps(item))
     require_clean(item["worktree"])
     with item_lock(ctx, args.slug):
-        code, report = run_checks(ctx, args.slug, item)
+        code, report = run_checks(ctx, args.slug, item, args.agent)
     report["item_now"] = apply_check_failure(ctx, args.slug, code, report.get("message", ""))
     emit(report, code)
 
@@ -803,6 +875,12 @@ def merge_locked(ctx, args):
     if git("rev-list", "--count", f"{ctx.main}..{branch}", cwd=ctx.root) == "0":
         raise Refused("branch has no commits ahead of main")
 
+    # Measured before the item file's removal is folded into the last commit.
+    stats = review_work(ctx, item, worktree)
+    with state(ctx) as st:
+        if args.slug in st["items"]:
+            st["items"][args.slug]["review_work"] = stats
+
     if git_ok("cat-file", "-e", f"HEAD:{item_path}", cwd=worktree):
         git("rm", "--quiet", "--ignore-unmatch", item_path, cwd=worktree)
         git("commit", "--quiet", "--amend", "--no-edit", cwd=worktree)
@@ -815,7 +893,7 @@ def merge_locked(ctx, args):
             return 5, {"ok": False, "conflicts": conflicts.splitlines(),
                        "message": f"run `git rebase {ctx.main}` in the worktree, resolve, then merge again"}
 
-    code, report = run_checks(ctx, args.slug, item)
+    code, report = run_checks(ctx, args.slug, item, args.agent)
     if code:
         report["item_now"] = apply_check_failure(ctx, args.slug, code, report.get("message", ""))
         return code, report
@@ -836,6 +914,7 @@ def merge_locked(ctx, args):
             if code == 6:
                 current.update(status="needs_you", reason=message, reviewer=None)
                 report["item_now"] = "needs_you"
+                log_event(ctx, "needs_you", item=args.slug, reason=message)
         return code, report
 
     with state(ctx) as st:
@@ -854,9 +933,13 @@ def merge_locked(ctx, args):
 
 def cmd_merge(ctx, args):
     ctx.require_agent(args.agent)
+    asked = time.time()
     with file_lock(ctx.lock_path("merge"), timeout=wait_limit(ctx), inherit=True):
         with item_lock(ctx, args.slug):
+            started = time.time()
             code, report = merge_locked(ctx, args)
+    log_event(ctx, "merge_attempt", item=args.slug, agent=args.agent, exit=code,
+           lock_wait=round(started - asked), seconds=round(time.time() - started))
     emit(report, code)
 
 
@@ -897,6 +980,127 @@ def cmd_status(ctx, _args):
             "issues": issue_progress(st["merged"], on_main),
         }
     emit(emit_obj)
+
+
+def parse_since(text):
+    """'24h', '7d', an ISO date or time, or nothing for the whole run."""
+    if not text:
+        return 0.0
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([hd])", text)
+    if match:
+        return time.time() - float(match[1]) * (3600 if match[2] == "h" else 86400)
+    try:
+        import datetime
+        return datetime.datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        raise Refused(f"--since takes 24h, 7d or an ISO date, not {text!r}", code=2)
+
+
+def hours(seconds):
+    return round(seconds / 3600, 2)
+
+
+def median(values):
+    values = sorted(values)
+    if not values:
+        return None
+    mid = len(values) // 2
+    return values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
+
+
+def read_events(ctx, since):
+    path = ctx.state_dir / "events.jsonl"
+    events = []
+    if path.exists():
+        for line in path.read_text().splitlines():
+            with contextlib.suppress(ValueError):
+                event = json.loads(line)
+                if event.get("at", 0) >= since:
+                    events.append(event)
+    return events
+
+
+def batches(merged, since):
+    """For goal runs: each plan-batch merge closes a batch. Spans run plan to plan."""
+    spans, start, count = [], None, 0
+    for rec in merged:
+        count += 1
+        if rec["item"].startswith("plan-batch-"):
+            if start is not None and rec["at"] >= since:
+                spans.append({"closed_by": rec["item"], "merged": count,
+                              "hours": hours(rec["at"] - start),
+                              "hours_per_item": hours((rec["at"] - start) / count)})
+            start, count = rec["at"], 0
+    return spans
+
+
+def cmd_report(ctx, args):
+    """Who did what, how long it took, and where time went. Read-only."""
+    since = parse_since(args.since)
+    path = ctx.state_dir / "state.json"
+    st = json.loads(path.read_text()) if path.exists() else {"merged": [], "items": {}}
+    merged = [r for r in st["merged"] if r.get("at", 0) >= since]
+    events = read_events(ctx, since)
+    agents = {name: {"built": 0, "plans_built": 0, "reviewed": 0, "reviews_with_fixes": 0,
+                     "built_work": {"commits": 0, "files": 0, "lines": 0},
+                     "review_fixes": {"commits": 0, "files": 0, "lines": 0},
+                     "build_hours": [], "review_hours": [], "waited_hours": 0.0,
+                     "check_hours": 0.0, "escalated": 0, "released": 0}
+              for name in ctx.agents}
+    timed = 0
+    for rec in merged:
+        author, reviewer = agents.get(rec["author"]), agents.get(rec.get("reviewer"))
+        if author:
+            author["plans_built" if rec["item"].startswith("plan-batch-") else "built"] += 1
+            for key, value in (rec.get("author_work") or {}).items():
+                author["built_work"][key] += value
+            if rec.get("claimed_at") and rec.get("submitted_at"):
+                author["build_hours"].append(rec["submitted_at"] - rec["claimed_at"])
+        if reviewer:
+            reviewer["reviewed"] += 1
+            fixes = rec.get("review_work") or {}
+            for key, value in fixes.items():
+                reviewer["review_fixes"][key] += value
+            reviewer["reviews_with_fixes"] += bool(fixes.get("commits"))
+            if rec.get("review_started_at"):
+                reviewer["review_hours"].append(rec["at"] - rec["review_started_at"])
+        timed += bool(rec.get("claimed_at") and rec.get("review_started_at"))
+    checks = {}
+    for event in events:
+        agent = agents.get(event.get("agent"))
+        kind = event["event"]
+        if kind == "wait" and agent:
+            agent["waited_hours"] += event["seconds"] / 3600
+        elif kind == "check":
+            entry = checks.setdefault(event["check"], {"runs": 0, "failed": 0, "seconds": []})
+            entry["runs"] += 1
+            entry["failed"] += event["exit"] != 0
+            entry["seconds"].append(event["seconds"])
+            if agent:
+                agent["check_hours"] += event["seconds"] / 3600
+        elif kind in ("escalate", "release") and agent:
+            agent["escalated" if kind == "escalate" else "released"] += 1
+    for agent in agents.values():
+        for key in ("build_hours", "review_hours"):
+            value = median(agent.pop(key))
+            agent["median_" + key] = None if value is None else hours(value)
+        agent["waited_hours"] = round(agent["waited_hours"], 2)
+        agent["check_hours"] = round(agent["check_hours"], 2)
+    for entry in checks.values():
+        seconds = entry.pop("seconds")
+        entry["median_minutes"] = round(median(seconds) / 60, 1)
+        entry["total_hours"] = hours(sum(seconds))
+    lock_waits = [e["lock_wait"] for e in events if e["event"] == "merge_attempt"]
+    emit({
+        "since": since or None,
+        "merged": len(merged),
+        "timed": f"{timed} of {len(merged)} merged items have build and review times",
+        "agents": agents,
+        "checks": checks,
+        "merge_lock_wait_hours": hours(sum(lock_waits)),
+        "needs_you": {s: i.get("reason") for s, i in st["items"].items() if i["status"] == "needs_you"},
+        "batches": batches(st["merged"], since),
+    })
 
 
 def cmd_setup_machine(ctx, args):
@@ -984,6 +1188,9 @@ def main():
     requeue.add_argument("slug")
     requeue.add_argument("--to", choices=["open", "needs_review"], required=True)
     requeue.set_defaults(func=cmd_requeue)
+    report = sub.add_parser("report")
+    report.add_argument("--since", help="24h, 7d or an ISO date; default: the whole run")
+    report.set_defaults(func=cmd_report)
     setup = sub.add_parser("setup-machine")
     setup.add_argument("name")
     setup.set_defaults(func=cmd_setup_machine)

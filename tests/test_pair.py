@@ -800,5 +800,109 @@ class Machines(Base):
         self.assertIn("one", repo.pair("status")[1]["needs_you"])
 
 
+class Reporting(Base):
+    def fix(self, repo, answer, path="server/a.txt", text="fixed by reviewer\n"):
+        tree = Path(answer["worktree"])
+        (tree / path).write_text(text)
+        repo.git("add", ".", cwd=tree)
+        repo.git("commit", "-qm", "review fix", cwd=tree)
+
+    def test_report_credits_the_builder_and_the_reviewer_separately(self):
+        repo = self.repo()
+        settings = repo.root / ".backlog-duo.toml"
+        settings.write_text('report_exclude = ["web/**"]\n' + settings.read_text())
+        repo.git("commit", "-qam", "exclude web from reports")
+        repo.item("one", touches="server/**, web/**")
+        answer = repo.next("claude")
+        (Path(answer["worktree"]) / "web/a.txt").write_text("not counted\n")
+        repo.work(answer, text="line one\nline two\n")
+        self.assertEqual(repo.pair("submit", "one", "--agent", "claude")[0], 0)
+        review = repo.next("codex")
+        self.fix(repo, review)
+        self.assertEqual(repo.pair("merge", "one", "--agent", "codex")[0], 0)
+        code, out = repo.pair("report")
+        self.assertEqual(code, 0, out)
+        claude, codex = out["agents"]["claude"], out["agents"]["codex"]
+        self.assertEqual((claude["built"], claude["reviewed"]), (1, 0))
+        self.assertEqual((codex["built"], codex["reviewed"], codex["reviews_with_fixes"]), (0, 1, 1))
+        self.assertEqual(claude["built_work"], {"commits": 1, "files": 1, "lines": 3})
+        self.assertEqual(codex["review_fixes"], {"commits": 1, "files": 1, "lines": 3})
+        self.assertIsNotNone(claude["median_build_hours"])
+        self.assertIsNotNone(codex["median_review_hours"])
+        self.assertEqual(out["checks"]["server"]["runs"], 1)
+        self.assertEqual(out["timed"], "1 of 1 merged items have build and review times")
+
+    def test_a_review_with_no_changes_counts_no_fixes(self):
+        repo = self.repo()
+        repo.item("one")
+        repo.do_item("claude")
+        repo.next("codex")
+        self.assertEqual(repo.pair("merge", "one", "--agent", "codex")[0], 0)
+        codex = repo.pair("report")[1]["agents"]["codex"]
+        self.assertEqual((codex["reviewed"], codex["reviews_with_fixes"]), (1, 0))
+        self.assertEqual(codex["review_fixes"]["commits"], 0)
+
+    def test_reviewer_rebase_still_separates_the_work(self):
+        repo = self.repo()
+        repo.item("one")
+        repo.item("two", touches="web/**")
+        repo.do_item("claude")
+        review = repo.next("codex")
+        other = repo.next("claude")
+        repo.work(other, "web/a.txt")
+        repo.pair("submit", "two", "--agent", "claude")
+        self.fix(repo, review)
+        repo.git("rebase", "-q", "main", cwd=review["worktree"])
+        self.assertEqual(repo.pair("merge", "one", "--agent", "codex")[0], 0)
+        codex = repo.pair("report")[1]["agents"]["codex"]
+        self.assertEqual(codex["review_fixes"]["commits"], 1)
+
+    def test_waiting_and_escalations_are_recorded(self):
+        repo = self.repo()
+        repo.item("one")
+        repo.next("claude")
+        self.assertEqual(repo.next("codex")["action"], "wait")
+        repo.pair("escalate", "one", "--agent", "claude", "--reason", "needs a real device")
+        repo.next("codex")
+        out = repo.pair("report")[1]
+        self.assertEqual(out["agents"]["claude"]["escalated"], 1)
+        self.assertIn("one", out["needs_you"])
+        events = (repo.root / ".git/backlog-duo/events.jsonl").read_text().splitlines()
+        self.assertIn("wait", [json.loads(e)["event"] for e in events])
+
+    def test_goal_batches_run_from_plan_to_plan(self):
+        repo = self.repo()
+        for day, (slug, touches) in enumerate((("plan-batch-1", "docs/backlog/**"),
+                                               ("a", "server/**"),
+                                               ("plan-batch-2", "docs/backlog/**")), 1):
+            repo.item(slug, touches=touches, added=f"2026-01-0{day}",
+                      depends="a" if slug == "plan-batch-2" else None)
+        for slug, path in (("plan-batch-1", "docs/note.md"), ("a", "server/a.txt"),
+                           ("plan-batch-2", "docs/other.md")):
+            answer = repo.next("claude")
+            self.assertEqual(answer["item"], slug)
+            repo.work(answer, path)
+            repo.pair("submit", slug, "--agent", "claude")
+            repo.next("codex")
+            self.assertEqual(repo.pair("merge", slug, "--agent", "codex")[0], 0)
+        out = repo.pair("report")[1]
+        self.assertEqual(out["agents"]["claude"]["plans_built"], 2)
+        self.assertEqual(out["agents"]["claude"]["built"], 1)
+        self.assertEqual([b["closed_by"] for b in out["batches"]], ["plan-batch-2"])
+        self.assertEqual(out["batches"][0]["merged"], 2)
+
+    def test_since_filters_and_report_changes_nothing(self):
+        repo = self.repo()
+        repo.item("one")
+        repo.do_item("claude")
+        repo.next("codex")
+        repo.pair("merge", "one", "--agent", "codex")
+        state = (repo.root / ".git/backlog-duo/state.json").read_text()
+        self.assertEqual(repo.pair("report", "--since", "2999-01-01")[1]["merged"], 0)
+        self.assertEqual(repo.pair("report", "--since", "1h")[1]["merged"], 1)
+        self.assertEqual(repo.pair("report", "--since", "soon")[0], 2)
+        self.assertEqual((repo.root / ".git/backlog-duo/state.json").read_text(), state)
+
+
 if __name__ == "__main__":
     unittest.main()

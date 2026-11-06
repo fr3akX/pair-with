@@ -13,7 +13,7 @@ Maris runs parallel agents by hand: starting each Codex run, choosing tasks by i
 
 ## Non-goals
 
-- More than two agents.
+- More than two agents doing the work. An optional watch, which builds and reviews nothing, is the only third agent.
 - Running without herdr. It can be added later if there's a need.
 - Deploying or recording releases. Those stay with the user.
 - Running agents on remote machines. They stay on the Linux machine, and remote machines only run tests.
@@ -45,6 +45,7 @@ These would count as failure even if everything technically worked:
 - A first run in a new repo drafts settings and backlog folder and waits for approval.
 - Both agents read one skill file, linked into `~/.claude/skills` and `~/.codex/skills` from this repo.
 - The skill is called `pair-with`, and a run can start with `pair with codex astra high`, naming the other agent, its model and its effort.
+- The helper records who built and reviewed what and how long each step took, rather than leaving that to an agent. An optional third agent watches an unattended run and unblocks it. No agent mediates: decisions the two agents can't settle go to the user.
 
 ## Calls made while building (please check)
 
@@ -72,6 +73,11 @@ These go beyond what was discussed:
 20. **The brainstorm is written into this skill**, not delegated to `superpowers:brainstorming`, because that skill ends by handing off to a plan and only exists where superpowers is installed.
 21. **Names on disk keep the old name.** `.backlog-duo.toml`, `.git/backlog-duo`, `.backlog-duo-worktrees` and `duo/*` branches are unchanged, because existing repos and runs rely on them. The repo itself is now `pair-with`, on GitHub and on disk.
 22. **A model or effort named when starting applies to that run only.** It replaces the flag in the settings and doesn't edit the file.
+23. **History is an append-only `events.jsonl`** next to the state file, plus times and work counts on each merged record. Writing it never blocks work, and `pair.py report` is read-only.
+24. **Builder and reviewer work is split by commit, not by message.** The branch head when the first review starts marks where the builder's work ends. If the reviewer rebases, its share is estimated from the branch's own files.
+25. **The watch is always Claude**, because it relies on `/loop`. It defaults to Sonnet every 60 minutes, and `[watch]` in the settings can change both. It starts only when the user asks for a watched run.
+26. **The watch's limits copy the hourly watch used on the first long run:** prompt a stalled agent at most twice per item, approve a prompt once only for ordinary work inside the repo, and restart a dead agent once a day. It never runs commands that change run state.
+27. **The first agent renames itself `pair-<name>`**, so the watch and the user can find both agents by name.
 
 ## Known limits
 
