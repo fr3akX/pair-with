@@ -41,6 +41,8 @@ WORKTREE_DIR = ".backlog-duo-worktrees"
 REMOTE_REF = "refs/heads/backlog-duo-test"
 MARKER = ".git/backlog-duo-checkout"
 ACTIVE = {"in_progress", "needs_review", "reviewing"}
+PRIORITIES = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}   # No priority counts as P3.
+PLAN_PREFIX = "plan-batch-"
 RUN_PID_FILE = ".git/backlog-duo-run.pid"
 # No connection sharing: a background ssh master would inherit and hold our locks.
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
@@ -270,7 +272,7 @@ def parse_item(slug, text):
             key, value = key.strip(), value.strip()
             if key in ("touches", "depends"):
                 item[key] = split_list(value)
-            elif key in ("worth", "added", "where", "issue"):
+            elif key in ("worth", "added", "where", "issue", "priority"):
                 item[key] = value
     for line in body:
         if line.startswith("# "):
@@ -297,6 +299,8 @@ def item_problem(ctx, item, on_main):
         return "slug must use lowercase letters, digits and hyphens"
     if not item["touches"]:
         return "no touches list, so overlap cannot be judged"
+    if item.get("priority") and item["priority"] not in PRIORITIES:
+        return f"priority must be one of {', '.join(PRIORITIES)}, not {item['priority']!r}"
     for dep in item["depends"]:
         if dep not in on_main and not git(
             "log", "-1", "--format=%h", ctx.main, "--", f"{BACKLOG_DIR}/{dep}.md", cwd=ctx.root
@@ -359,6 +363,27 @@ def reconcile(ctx, st):
             ctx.refresh()
             create_worktree(ctx, slug)
             ctx.refresh()
+
+
+def effective_ranks(on_main):
+    """Each item's priority rank, raised to that of anything that depends on it, transitively."""
+    rank = {slug: PRIORITIES.get(item.get("priority") or "P3", 3) for slug, item in on_main.items()}
+    changed = True
+    while changed:
+        changed = False
+        for slug, item in on_main.items():
+            if item["worth"] != "yes":
+                continue
+            for dep in item["depends"]:
+                if dep in rank and rank[slug] < rank[dep]:
+                    rank[dep] = rank[slug]
+                    changed = True
+    return rank
+
+
+def held_by_pause(st, slug):
+    paused = st.get("paused")
+    return bool(paused) and (paused.get("now") or slug.startswith(PLAN_PREFIX))
 
 
 def areas(item):
@@ -433,7 +458,8 @@ def choose_next(ctx, agent, st):
     )
     capped = unreviewed >= ctx.settings.get("max_unreviewed", 2)
     active = [i for i in items.values() if i["status"] in ACTIVE or i["status"] == "needs_you"]
-    candidates = sorted(on_main.values(), key=lambda i: (i["added"], i["slug"]))
+    rank = effective_ranks(on_main)
+    candidates = sorted(on_main.values(), key=lambda i: (rank[i["slug"]], i["added"], i["slug"]))
     for candidate in candidates:
         slug = candidate["slug"]
         if slug in items or candidate["worth"] != "yes":
@@ -441,6 +467,9 @@ def choose_next(ctx, agent, st):
         problem = item_problem(ctx, candidate, on_main)
         if problem:
             attention[slug] = problem
+            continue
+        if held_by_pause(st, slug):
+            blocked[slug] = "run paused for re-prioritizing"
             continue
         unmet = [dep for dep in candidate["depends"] if dep in on_main]
         if unmet:
@@ -470,8 +499,9 @@ def choose_next(ctx, agent, st):
 
     busy = [i for i in items.values() if i["status"] in ACTIVE]
     if not busy:
-        return {"action": "stop", "reason": "nothing left to claim or review",
-                "blocked": blocked, "attention": attention}
+        reason = ("run paused for re-prioritizing; the user resumes it" if st.get("paused")
+                  else "nothing left to claim or review")
+        return {"action": "stop", "reason": reason, "blocked": blocked, "attention": attention}
     since = st["waiting_since"].setdefault(agent, now)
     if now - since > ctx.settings.get("max_wait_minutes", 120) * 60:
         return {"action": "stop", "reason": "waited too long for the other agent",
@@ -976,10 +1006,26 @@ def cmd_status(ctx, _args):
             "needs_you": {s: i.get("reason") for s, i in items.items() if i["status"] == "needs_you"},
             "attention": attention,
             "open": sorted(s for s, c in on_main.items() if s not in items and c["worth"] == "yes"),
+            "paused": st.get("paused"),
             "merged": st["merged"],
             "issues": issue_progress(st["merged"], on_main),
         }
     emit(emit_obj)
+
+
+def cmd_pause(ctx, args):
+    with state(ctx) as st:
+        st["paused"] = {"at": time.time(), "now": args.now}
+        paused = st["paused"]
+    log_event(ctx, "pause", now=args.now)
+    emit({"ok": True, "paused": paused})
+
+
+def cmd_resume(ctx, _args):
+    with state(ctx) as st:
+        was = st.pop("paused", None)
+    log_event(ctx, "resume")
+    emit({"ok": True, "was_paused": bool(was)})
 
 
 def parse_since(text):
@@ -1162,8 +1208,11 @@ def cmd_doctor(ctx, _args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name, func in (("doctor", cmd_doctor), ("status", cmd_status)):
+    for name, func in (("doctor", cmd_doctor), ("status", cmd_status), ("resume", cmd_resume)):
         sub.add_parser(name).set_defaults(func=func)
+    pause = sub.add_parser("pause", help="hold plan-batch items; --now holds every unclaimed item")
+    pause.add_argument("--now", action="store_true")
+    pause.set_defaults(func=cmd_pause)
     next_cmd = sub.add_parser("next")
     next_cmd.add_argument("--agent", required=True)
     next_cmd.add_argument("--wait-seconds", type=int, default=0)

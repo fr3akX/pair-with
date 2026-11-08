@@ -4,7 +4,7 @@ A skill that has two coding agents work one repo's backlog in parallel. Each bui
 
 Start it from a Claude or Codex session in a herdr pane by naming the other agent, with a model and effort if you want them: `pair with codex astra high`.
 
-Add `watched` to start a third agent that keeps an unattended run moving and logs what happens. `pair.py report` shows who built and reviewed what, and where the time went.
+To change what runs next, ask to pause and re-prioritize: the run finishes its current batch, you pick P0 and P1, and anything they depend on moves up with them. Add `watched` to start a third agent that keeps an unattended run moving and logs what happens. `pair.py report` shows who built and reviewed what, and where the time went.
 
 - Skill: `skills/pair-with/SKILL.md`
 - Coordination helper: `skills/pair-with/scripts/pair.py`

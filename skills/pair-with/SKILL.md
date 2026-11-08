@@ -89,9 +89,23 @@ The run keeps itself going by making the last item of each batch plan the next b
 2. If the last two batches added no verified behaviour, do the same and say so.
 3. Otherwise write the next 3 to 6 items, using the rules in **Turning an issue into items**, plus `plan-batch-<n+1>` depending on all of them.
 
-**Reviewing a `plan-batch-<n>` item.** Check that the measurement is true, that each item moves the goal forward, and that nothing repeats work already done or waits on the user. Fix the plan yourself, then merge.
+If the brief has a `## Priorities` section, write items for its P0 entries first, then P1. Take P3 work only when no P0 or P1 entry has work an agent can do. Give each item the `priority` of the highest entry it moves.
+
+**Reviewing a `plan-batch-<n>` item.** Check that the measurement is true, that each item moves the goal forward, that the items follow the brief's priorities, and that nothing repeats work already done or waits on the user. Fix the plan yourself, then merge.
 
 A goal never widens what's off limits. Deploying, pushing and anything else reserved for the user stay reserved.
+
+## Re-prioritizing
+
+Use this when the user asks to re-prioritize the work, or to pause a run and re-prioritize. Do it with the user, outside the loop, from your own session or the run's first agent.
+
+1. **Pause.** `pair.py pause` holds every `plan-batch` item, so a goal run finishes its current batch, then stops. `pair.py pause --now` holds every unclaimed item instead, so agents finish only what they hold or have awaiting review. Agents stop by themselves when `next` says the run is paused; don't prompt or stop them.
+2. **List what's left.** In a goal run, list the units the brief measures progress by, such as checklist rows that aren't done. Otherwise list the open items. For each, give what's left in one to three lines and what it needs done first: an item's `depends`, or for goal units, the dependencies you read from the evidence. Mark anything only the user can do.
+3. **The user picks.** P0 first, then P1. Everything else is P3. Then raise every dependency of a P0 or P1 entry to that entry's level, and their dependencies in turn. Show the user what moved up and which entry moved it. Where your harness can publish an interactive page, offer one with a P0/P1/P3 switch on each entry that raises dependencies as the user clicks. Otherwise use a table. Make the changes they ask for before writing anything.
+4. **Record it** once `status` shows nothing active. Approval covers one commit on the main branch, made as **Turning an issue into items** step 6 says. Set `priority: P0` or `priority: P1` on each open item the user ranked that way; P3 items need no field. In a goal run, the entries are usually units with no item yet, so also add a dated `## Priorities` section to the goal brief that lists P0, P1 and P3, marks which entries moved up and why, and gives any reasons the user stated. Planners turn that section into items.
+5. **Resume.** Run `pair.py resume`, then prompt each agent with `herdr agent prompt pair-<name> "Continue the pair-with loop as agent '<name>'. Go straight to The loop."`.
+
+`next` claims items by priority, P0 first, then by `added`. An item counts at the highest priority of anything that depends on it, so a P0 item's prerequisites run before other P1 work.
 
 ## First-time setup
 
@@ -118,7 +132,7 @@ Enough detail for an agent who wasn't there to do it and to know when it's done.
 Brief: docs/backlog/briefs/22-billing.md
 ```
 
-Only `worth: yes` items run. `touches` is required: it's how overlap is judged, so list every area the work may change. `depends` and `issue` are optional.
+Only `worth: yes` items run. `touches` is required: it's how overlap is judged, so list every area the work may change. `depends`, `issue` and `priority` (`P0` to `P3`, see **Re-prioritizing**) are optional.
 
 ## The loop
 
@@ -218,7 +232,7 @@ A check must leave the worktree unchanged. If `check` or `merge` says a check ch
 
 ## Finishing
 
-When `next` says stop, run `pair.py status` and report to the user: what merged, each `needs_you` item and the decision it needs, each `held` item, each `attention` item, and anything still `active`. For each entry in `issues`, say whether it's `complete` or what remains, and list the work its brief leaves for the user. A complete issue still needs the user to push and close it. Stop there. The other agent reports on its own.
+When `next` says stop, run `pair.py status` and report to the user. If `next` said the run is paused, say so first: the run isn't finished, and the user resumes it. Then report what merged, each `needs_you` item and the decision it needs, each `held` item, each `attention` item, and anything still `active`. For each entry in `issues`, say whether it's `complete` or what remains, and list the work its brief leaves for the user. A complete issue still needs the user to push and close it. Stop there. The other agent reports on its own.
 
 ## Reporting
 
@@ -250,7 +264,9 @@ herdr agent prompt pair-watch "/loop <every_minutes>m Use the pair-with skill as
 
 Never run `next`, `submit`, `check`, `merge`, `release`, `escalate` or `requeue`. Never rule on a `needs_you`, `held` or `attention` item. Never edit code, settings, items or state, commit, kill a process, delete anything, or start more agents than the step above allows.
 
-**Ending.** When `status` shows nothing active or open, both agents have stopped, and, in a goal run, no `plan-batch` item is left on the main branch, write a final summary to the log and the pane. Cover what merged, `pair.py report` for the run, each `needs_you` item with the exact decision it needs, and every action the watch took. Then end the loop.
+An agent that stopped because the run is paused isn't stalled. Never run `pause` or `resume` yourself.
+
+**Ending.** End when both agents have stopped and either `status` shows nothing active or open with no `plan-batch` item left on the main branch, or `status` shows `paused` with nothing active. Write a final summary to the log and the pane. Cover what merged, `pair.py report` for the run, each `needs_you` item with the exact decision it needs, and every action the watch took. For a pause, also say the run is waiting for the user to re-prioritize and resume it. Then end the loop.
 
 ## Red flags
 
@@ -263,6 +279,8 @@ Never run `next`, `submit`, `check`, `merge`, `release`, `escalate` or `requeue`
 | "This decision is small, I'll pick for the user" | Before the run, ask if a wrong guess would matter. During it, list the call for the reviewer |
 | "I'll stop and wait for the user on this question" | Only the user-only cases in **Escalating** go to them. Everything else goes to the reviewer |
 | "The queue is empty, so the goal must be done" | Only the `plan-batch` item decides that, against the brief's done test |
+| "The run is paused, I'll resume it so work continues" | Only the user resumes a pause |
+| "This P3 item is quicker, I'll plan it ahead of P0 work" | Plan by the brief's priorities. P3 waits until no P0 or P1 work can run |
 | "This failing check is unrelated to the change" | The merge will still refuse. Fix it or escalate |
 | "I'll run the full check before submitting, to be safe" | The merge runs it. Test what you changed and submit |
 | "I'll narrow the check so this merge goes faster" | Never. Narrow your own test runs, not the gate |

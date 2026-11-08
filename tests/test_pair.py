@@ -62,7 +62,7 @@ class Repo:
                               capture_output=True, text=True).stdout.strip()
 
     def item(self, slug, touches="server/**", worth="yes", added="2026-01-01", depends=None,
-             issue=None):
+             issue=None, priority=None):
         folder = self.root / "docs/backlog"
         folder.mkdir(parents=True, exist_ok=True)
         lines = ["---", f"worth: {worth}", f"added: {added}"]
@@ -72,6 +72,8 @@ class Repo:
             lines.append(f"depends: {depends}")
         if issue:
             lines.append(f"issue: {issue}")
+        if priority:
+            lines.append(f"priority: {priority}")
         (folder / f"{slug}.md").write_text("\n".join(lines + ["---", f"# {slug}", ""]))
         self.git("add", ".")
         self.git("commit", "-qm", f"add {slug}")
@@ -192,6 +194,63 @@ class Claiming(Base):
         folder.mkdir(parents=True)
         (folder / "draft.md").write_text("---\nworth: yes\ntouches: web/**\n---\n# d\n")
         self.assertEqual(repo.next("claude")["action"], "stop")
+
+
+class Priorities(Base):
+    def test_higher_priority_is_claimed_before_older_items(self):
+        repo = self.repo()
+        repo.item("old", added="2026-01-01")
+        repo.item("later-p1", touches="web/**", added="2026-01-02", priority="P1")
+        repo.item("latest-p0", touches="other/**", added="2026-01-03", priority="P0")
+        self.assertEqual(repo.next("claude")["item"], "latest-p0")
+        self.assertEqual(repo.next("codex")["item"], "later-p1")
+
+    def test_a_dependency_runs_at_the_priority_of_what_needs_it(self):
+        repo = self.repo(cap=5)
+        repo.item("p1-work", touches="web/**", added="2026-01-01", priority="P1")
+        repo.item("base", added="2026-01-02")
+        repo.item("p0-work", touches="other/**", added="2026-01-03", depends="base", priority="P0")
+        self.assertEqual(repo.next("claude")["item"], "base")
+
+    def test_an_unknown_priority_needs_the_user(self):
+        repo = self.repo()
+        repo.item("odd", priority="urgent")
+        answer = repo.next("claude")
+        self.assertEqual(answer["action"], "stop")
+        self.assertIn("priority", answer["attention"]["odd"])
+
+
+class Pausing(Base):
+    def test_pause_holds_the_plan_item_until_resumed(self):
+        repo = self.repo()
+        repo.item("work")
+        repo.item("plan-batch-2", touches="docs/backlog/**", added="2026-01-02")
+        self.assertEqual(repo.pair("pause")[0], 0)
+        self.assertEqual(repo.next("claude")["item"], "work")
+        answer = repo.next("codex")
+        self.assertEqual(answer["action"], "wait")
+        self.assertIn("paused", answer["blocked"]["plan-batch-2"])
+        self.assertTrue(repo.pair("status")[1]["paused"])
+        repo.pair("resume")
+        self.assertEqual(repo.next("codex")["item"], "plan-batch-2")
+
+    def test_paused_run_with_nothing_active_stops_and_says_why(self):
+        repo = self.repo()
+        repo.item("plan-batch-2", touches="docs/backlog/**")
+        repo.pair("pause")
+        answer = repo.next("claude")
+        self.assertEqual(answer["action"], "stop")
+        self.assertIn("paused", answer["reason"])
+
+    def test_pause_now_holds_every_unclaimed_item(self):
+        repo = self.repo()
+        repo.item("one")
+        repo.item("two", touches="web/**")
+        claimed = repo.next("claude")["item"]
+        repo.pair("pause", "--now")
+        answer = repo.next("codex")
+        self.assertEqual(answer["action"], "wait")
+        self.assertEqual(repo.next("claude")["item"], claimed)
 
 
 class Review(Base):
