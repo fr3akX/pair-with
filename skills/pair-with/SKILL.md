@@ -87,11 +87,20 @@ The run keeps itself going by making the last item of each batch plan the next b
 
 1. If the done test is met, or everything left needs the user, add no new items. Record the result and what's left in the brief. This ends the run.
 2. If the last two batches added no verified behaviour, do the same and say so.
-3. Otherwise write the next 3 to 6 items, using the rules in **Turning an issue into items**, plus `plan-batch-<n+1>` depending on all of them.
+3. Otherwise write the next 3 to 6 items, using the rules in **Turning an issue into items**, plus a closing check item and its lookahead items, both depending on all of them (see **Closing checks** below), plus `plan-batch-<n+1>` depending on everything in the batch.
 
 If the brief has a `## Priorities` section, write items for its P0 entries first, then P1. Take P3 work only when no P0 or P1 entry has work an agent can do. Give each item the `priority` of the highest entry it moves.
 
-**Reviewing a `plan-batch-<n>` item.** Check that the measurement is true, that each item moves the goal forward, that the items follow the brief's priorities, and that nothing repeats work already done or waits on the user. Fix the plan yourself, then merge.
+**Reviewing a `plan-batch-<n>` item.** Check that the measurement is true, that each item moves the goal forward, that the items follow the brief's priorities, that the batch has the closing check and lookahead items **Closing checks** calls for, and that nothing repeats work already done or waits on the user. Fix the plan yourself, then merge.
+
+**Closing checks.** Every batch ends with one check item, and the brief records how often the full suite runs. Unless the user picks another interval, a full integration closes every third batch and a smoke item closes the two between. Name them `batch-<n>-check-integration` and `batch-<n>-smoke`.
+
+- **Smoke item.** Build the main branch as merged, start the app the way a user would on a test copy of the data, use each main screen once, save and reload once, and check for errors in the logs and the browser console. Record what ran. It adds no regression tests to the full suite, retakes no recorded results, and changes no file that triggers the full suite. Aim to finish within an hour, and fix any regression it finds in the smoke item.
+- **Full integration.** Add the regression tests from every item since the last full integration to the full suite, then run the full suite.
+- **Retire covered records.** When a newer passing test or recorded result covers the same behaviour as an older one, take the older one out of the suite instead of updating or retaking it. Keep its files, and in the evidence name each retired record and what now covers it. This isn't narrowing a check. The reviewer confirms each one and restores any whose behaviour nothing else covers.
+- **Counting progress.** After a smoke item, a unit of progress counts as done only if every check its done test names ran in full during that batch. Otherwise it waits for the next full integration.
+- **Lookahead items.** One agent takes the closing check, so give the other one work. Write two lookahead items in a batch that ends with a full integration, and at most one small one in a smoke batch. Each depends on the batch's other items, as the closing check does, so it opens when the closing check does. It prepares later work without needing the closing check's result, for example by reading code, capturing reference behaviour or drafting a design for a hard unit, and records what it found. It doesn't touch anything the closing check touches. Size it to about the closing check's length, and make the next `plan-batch` item depend on it.
+- **Reminders.** The watch may send an agent a one-line reminder that quotes one of these testing rules. Treat it as that rule, and carry on.
 
 A goal never widens what's off limits. Deploying, pushing and anything else reserved for the user stay reserved.
 
@@ -222,7 +231,7 @@ While building, fixing or reviewing, run the smallest set of tests that covers w
 
 - A run that reports no tests, or fewer than it should, is not a pass.
 - `pair.py merge` is the gate. It runs every check the change triggers, in full. Run it with nothing that narrows what a check covers, including environment variables, filters and edits to the settings.
-- The full suite runs when a milestone is done, not on every merge, so a slow check is triggered only by the item that closes a milestone. If that check fails, fix it in that item, whichever earlier item caused it.
+- The full suite runs when a milestone is done, not on every merge, so a slow check is triggered only by the item that closes a milestone. In a goal run, that's a full integration, as **Closing checks** says. If that check fails, fix it in that item, whichever earlier item caused it.
 
 ## Long commands
 
@@ -236,7 +245,7 @@ When `next` says stop, run `pair.py status` and report to the user. If `next` sa
 
 ## Reporting
 
-`pair.py report [--since 24h|7d|<ISO date>]` says who did what and where the time went. It's read-only, so anyone can run it at any time, including the user. For each agent it shows items built and reviewed, the commits and lines it wrote as builder and as reviewer, its median build and review hours, and its hours waiting and running checks. It also shows each check's runs, failures and median minutes, the time merges spent waiting for each other, and for goal runs, each batch's hours. `report_exclude` in the settings leaves paths such as generated data out of the line counts.
+`pair.py report [--since 24h|7d|<ISO date>]` says who did what and where the time went. It's read-only, so anyone can run it at any time, including the user. For each agent it shows items built and reviewed, the commits and lines it wrote as builder and as reviewer, its median build and review hours, and its hours waiting and running checks. It also shows each check's runs, failures and median minutes, the time merges spent waiting for each other, and for goal runs, each batch's hours and its three slowest items. `report_exclude` in the settings leaves paths such as generated data out of the line counts.
 
 Use it when the user asks how the run is going or who did what. Items merged before this was recorded have no times, and `timed` says how many do.
 
@@ -260,13 +269,29 @@ herdr agent prompt pair-watch "/loop <every_minutes>m Use the pair-with skill as
    - **A stalled agent with work left in `status`:** `herdr agent prompt pair-<name> "Continue the pair-with loop as agent '<name>'. Go straight to The loop."` without `--wait`, at most twice per agent per item, counted from the log. After that, record it for the user.
    - **An agent paused on an approval prompt:** approve once, never with an "always allow" option, but only for ordinary build, test, git or file work inside the repo or its worktrees for its item. Leave the prompt alone and record it if it deletes anything outside its worktree, pushes, deploys, uses credentials, touches anything named in `off_limits`, or does anything you can't tell.
    - **An agent's process or pane is gone:** start one replacement as **Starting a run** step 5 does, with the prompt above. Do this once per agent per day, and only after checking that no agent with that name is alive.
-4. Append one line to `<git common dir>/backlog-duo/watch.log`: the time, merged count, active and open items, each agent's state, and what you did.
+   - **An agent breaking a testing rule its pane shows:** send one reminder with `herdr agent prompt pair-<name> "<text>"`, without `--wait`, once per reminder per item, counted from the log. Never send one while the agent is waiting on an approval prompt. Use only these texts:
+     - when it reruns a whole set of tests or workflows after a fix that touched only some of them: "Reminder from the skill: after a small fix, rerun only what that fix affects, not the whole set."
+     - when a smoke item adds regression tests, retakes recorded results or changes what triggers the full suite: "Reminder from the skill: a smoke item adds no regression tests, retakes no recorded results and doesn't change what triggers the full suite."
+     - when a full integration updates or retakes an older record that a newer passing one covers: "Reminder from the skill: retire an older record that a newer passing one covers, instead of retaking it."
+4. **Watch the pace.** Run `pair.py report --since 24h` and compare it with the whole run's `pair.py report`. Record a slowdown when any of these is true:
+   - the last batch's `hours` is more than 1.5 times the median of the three batches before it;
+   - one of its `slowest` items took more than half the batch;
+   - a check's `median_minutes` over the last day is more than 1.5 times its median for the whole run, or its runs fail more than a third of the time;
+   - `merge_lock_wait_hours` or an agent's `waited_hours` over the last day is more than 2;
+   - an item has been `in_progress` or `reviewing` more than twice the agents' `median_build_hours` or `median_review_hours`.
 
-Never run `next`, `submit`, `check`, `merge`, `release`, `escalate` or `requeue`. Never rule on a `needs_you`, `held` or `attention` item. Never edit code, settings, items or state, commit, kill a process, delete anything, or start more agents than the step above allows.
+   For each, name the item or check, the numbers, and the likely cause from the agent's pane, such as a check rerun after failures, many recorded results being retaken, or work queued behind the shared check lock. Then name the change that would help, such as a longer full-integration interval in the brief, retiring covered records, or splitting the item. These are the user's decisions, so record them and don't act on them.
+
+   When a goal batch closes, also record each agent's idle hours in it (`waited_hours` for that span) and whether it had the lookahead items **Closing checks** asks for.
+5. **Forecast usage.** Read each agent's usage from its pane, such as the weekly percentage left in Codex's footer or a limit message in Claude's, and log it. From the log, work out how much a batch uses. Tell the user once each when an agent falls below 15% and 10%, and when the forecast shows it running out before the current batch's closing check and plan merge. Running out pauses that agent until the limit resets, which the user may prefer to plan for.
+6. **Watch the result, in a goal run.** When a batch's progress fold merges, log the counts the brief measures. If it adds nothing that counts as done, count the batches in a row without any. From the second such batch on, tell the user, with the units the evidence names as closest to done and what each still lacks. This is separate from the stop rule in **Running toward a goal**, which only looks for batches that verified nothing new.
+7. Append one line to `<git common dir>/backlog-duo/watch.log`: the time, merged count, active and open items, each agent's state and usage, what you did, and anything from steps 4 to 6.
+
+Never run `next`, `submit`, `check`, `merge`, `release`, `escalate` or `requeue`. Never rule on a `needs_you`, `held` or `attention` item. Never edit code, settings, items or state, commit, kill a process, delete anything, start more agents than step 3 allows, or send an agent any text other than the ones step 3 gives.
 
 An agent that stopped because the run is paused isn't stalled. Never run `pause` or `resume` yourself.
 
-**Ending.** End when both agents have stopped and either `status` shows nothing active or open with no `plan-batch` item left on the main branch, or `status` shows `paused` with nothing active. Write a final summary to the log and the pane. Cover what merged, `pair.py report` for the run, each `needs_you` item with the exact decision it needs, and every action the watch took. For a pause, also say the run is waiting for the user to re-prioritize and resume it. Then end the loop.
+**Ending.** End when both agents have stopped and either `status` shows nothing active or open with no `plan-batch` item left on the main branch, or `status` shows `paused` with nothing active. Write a final summary to the log and the pane. Cover what merged, `pair.py report` for the run, where the time went, idle agent-hours, reminders sent, any slowdowns recorded, each agent's usage left, each `needs_you` item with the exact decision it needs, and every action the watch took. For a pause, also say the run is waiting for the user to re-prioritize and resume it. Then end the loop.
 
 ## Red flags
 

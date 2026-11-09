@@ -949,6 +949,9 @@ class Reporting(Base):
         self.assertEqual(out["agents"]["claude"]["built"], 1)
         self.assertEqual([b["closed_by"] for b in out["batches"]], ["plan-batch-2"])
         self.assertEqual(out["batches"][0]["merged"], 2)
+        slowest = out["batches"][0]["slowest"]
+        self.assertEqual({s["item"] for s in slowest}, {"a", "plan-batch-2"})
+        self.assertTrue(all(s["hours"] >= 0 for s in slowest))
 
     def test_since_filters_and_report_changes_nothing(self):
         repo = self.repo()

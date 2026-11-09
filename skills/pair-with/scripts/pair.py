@@ -1067,16 +1067,22 @@ def read_events(ctx, since):
 
 
 def batches(merged, since):
-    """For goal runs: each plan-batch merge closes a batch. Spans run plan to plan."""
-    spans, start, count = [], None, 0
+    """For goal runs: each plan-batch merge closes a batch. Spans run plan to plan.
+
+    `slowest` names the three items that took longest from claim to merge, which is
+    where to look when a batch runs slow."""
+    spans, start, count, items = [], None, 0, []
     for rec in merged:
         count += 1
+        if rec.get("claimed_at"):
+            items.append({"item": rec["item"], "hours": hours(rec["at"] - rec["claimed_at"])})
         if rec["item"].startswith("plan-batch-"):
             if start is not None and rec["at"] >= since:
                 spans.append({"closed_by": rec["item"], "merged": count,
                               "hours": hours(rec["at"] - start),
-                              "hours_per_item": hours((rec["at"] - start) / count)})
-            start, count = rec["at"], 0
+                              "hours_per_item": hours((rec["at"] - start) / count),
+                              "slowest": sorted(items, key=lambda i: -i["hours"])[:3]})
+            start, count, items = rec["at"], 0, []
     return spans
 
 
