@@ -702,6 +702,14 @@ class CodexFindings(Base):
         self.assertEqual(code, 2, out)
         self.assertIn("sandbox", out["message"])
 
+    def test_doctor_requires_herdr_core_terminal(self):
+        repo = self.repo()
+        repo.item("one")
+        repo.env.pop("HC_TERMINAL_ID", None)
+        code, out = repo.pair("doctor")
+        self.assertEqual(code, 2, out)
+        self.assertIn("not running inside a herdr-core terminal", out["problems"])
+
     def test_doctor_changes_nothing(self):
         repo = self.repo()
         repo.item("one")

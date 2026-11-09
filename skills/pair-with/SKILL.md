@@ -27,14 +27,14 @@ You are the first agent unless your prompt names you as joining a run.
 2. If `doctor` reports `problems`, show them to the user and stop. Show `warnings` too, then continue. If it reports it can't write to the git directory, see **Permissions**.
 3. If the user named an issue or described work that has no items yet, do **Turning an issue into items**, then run `doctor` again. If they named an outcome with no fixed end, such as reaching parity, also do **Running toward a goal**. If they named no work and the backlog has no items, ask what to work on.
 4. Your agent name is the settings key whose `kind` matches you (`claude` or `codex`). If the user asked to pair with your own kind, tell them a run needs one of each, and stop.
-5. Start the other agent, using the args from **Choosing the other agent**. If `HERDR_ENV` isn't `1`, stop and tell the user this skill must be started inside a herdr pane. Rename yourself too, so both agents can be found by name.
+5. Start the other agent, using the args from **Choosing the other agent**. If `HC_TERMINAL_ID` isn't set, stop and tell the user this skill must be started inside a herdr-core terminal. Label yourself too, so every agent of the run can be found by name. The `herdr.space`/`herdr.tab` labels put the new agent in a pane of your tab, and its prompt goes in as its first message.
    ```bash
-   herdr agent rename "$(herdr pane current | jq -r .result.pane.pane_id)" pair-<your name>
-   pane=$(herdr pane split --current --direction right --cwd "$PWD" --no-focus | jq -r .result.pane.pane_id)
-   herdr agent start pair-<name> --kind <kind> --pane "$pane" --timeout 120000 -- <args>
-   herdr agent prompt pair-<name> "Use the pair-with skill. You are joining a run as agent '<name>'. Go straight to The loop."
+   L=$(hc get "$HC_TERMINAL_ID" | jq -r '"--label herdr.space=\(.labels["herdr.space"]) --label herdr.tab=\(.labels["herdr.tab"])"')
+   hc label "$HC_TERMINAL_ID" pair.agent=<your name>
+   hc run --bg --no-parent --keep --name pair-<name> --cwd "$PWD" --label pair.agent=<name> $L -- <kind> <args> "Use the pair-with skill. You are joining a run as agent '<name>'. Go straight to The loop."
    ```
-   Don't pass `--wait` to the prompt: you start working straight away too. If the other agent can't start, stop and tell the user.
+   Don't wait for it: you start working straight away too. If `hc run` fails or `hc get pair-<name>` doesn't show it `live`, stop and tell the user.
+   Any agent of the run is addressed by its label: `$(hc ls --json --label pair.agent=<name> | jq -r '.terminals[0].address')`, written `<address of name>` below.
 6. If the user asked for a watch, such as "pair with codex astra high, watched", start it as **Watching a run** describes.
 7. Go to **The loop**.
 
@@ -112,7 +112,7 @@ Use this when the user asks to re-prioritize the work, or to pause a run and re-
 2. **List what's left.** In a goal run, list the units the brief measures progress by, such as checklist rows that aren't done. Otherwise list the open items. For each, give what's left in one to three lines and what it needs done first: an item's `depends`, or for goal units, the dependencies you read from the evidence. Mark anything only the user can do.
 3. **The user picks.** P0 first, then P1. Everything else is P3. Then raise every dependency of a P0 or P1 entry to that entry's level, and their dependencies in turn. Show the user what moved up and which entry moved it. Where your harness can publish an interactive page, offer one with a P0/P1/P3 switch on each entry that raises dependencies as the user clicks. Otherwise use a table. Make the changes they ask for before writing anything.
 4. **Record it** once `status` shows nothing active. Approval covers one commit on the main branch, made as **Turning an issue into items** step 6 says. Set `priority: P0` or `priority: P1` on each open item the user ranked that way; P3 items need no field. In a goal run, the entries are usually units with no item yet, so also add a dated `## Priorities` section to the goal brief that lists P0, P1 and P3, marks which entries moved up and why, and gives any reasons the user stated. Planners turn that section into items.
-5. **Resume.** Run `pair.py resume`, then prompt each agent with `herdr agent prompt pair-<name> "Continue the pair-with loop as agent '<name>'. Go straight to The loop."`.
+5. **Resume.** Run `pair.py resume`, then prompt each agent with `hc send <address of name> "Continue the pair-with loop as agent '<name>'. Go straight to The loop."`.
 
 `next` claims items by priority, P0 first, then by `added`. An item counts at the highest priority of anything that depends on it, so a P0 item's prerequisites run before other P1 work.
 
@@ -253,20 +253,19 @@ Use it when the user asks how the run is going or who did what. Items merged bef
 
 A watch is an optional third agent that keeps an unattended run moving. It checks the run on a timer, unblocks what it safely can, and keeps a log for the user. It never mediates: anything the two agents escalate stays with the user.
 
-**Starting it.** The first agent starts the watch after the other agent, in a new pane. It's always Claude, because it relies on `/loop`. Its args come from `[watch]` in the settings, default `["--model", "sonnet"]`, and its interval comes from `every_minutes`, default 60.
+**Starting it.** The first agent starts the watch after the other agent, in a new pane of its tab. It's always Claude, because it relies on `/loop`. Its args come from `[watch]` in the settings, default `["--model", "sonnet"]`, and its interval comes from `every_minutes`, default 60.
 
 ```bash
-pane=$(herdr pane split --current --direction down --cwd "$PWD" --no-focus | jq -r .result.pane.pane_id)
-herdr agent start pair-watch --kind claude --pane "$pane" --timeout 120000 -- <watch args>
-herdr agent prompt pair-watch "/loop <every_minutes>m Use the pair-with skill as this run's watch. Do one round of Watching a run."
+L=$(hc get "$HC_TERMINAL_ID" | jq -r '"--label herdr.space=\(.labels["herdr.space"]) --label herdr.tab=\(.labels["herdr.tab"])"')
+hc run --bg --no-parent --keep --name pair-watch --cwd "$PWD" --label pair.agent=watch $L -- claude <watch args> "/loop <every_minutes>m Use the pair-with skill as this run's watch. Do one round of Watching a run."
 ```
 
 **One round.** The watch acts on its own, so it never asks a question or waits for an answer.
 
-1. Read: `pair.py status`; `herdr agent list`; for `pair-<name>` of each agent, `herdr pane read <pane> --source recent --lines 60`; `ps -Ao pid,etime,command` filtered to `pair.py` and the repo's check commands; the log below.
-2. Decide whether each agent is **stalled**. It is only if all of these are true: herdr shows it idle, its pane shows a finished turn at an empty prompt, no background shell or task of its is running, and no `pair.py` process of its is running. Waiting on `next`, a long check, or a silent hour isn't a stall. An agent paused by a usage limit isn't stalled until the limit resets.
+1. Read: `pair.py status`; `hc ls --json --label pair.agent=<name>` for each agent; for each, `hc get <address>` (`.status.state`) and `hc read <address> --lines 60`; `ps -Ao pid,etime,command` filtered to `pair.py` and the repo's check commands; the log below.
+2. Decide whether each agent is **stalled**. It is only if all of these are true: `hc get` shows its state `idle` or `done` (`done` is a turn that ended unwatched), its pane shows a finished turn at an empty prompt, no background shell or task of its is running, and no `pair.py` process of its is running. Waiting on `next`, a long check, or a silent hour isn't a stall. An agent paused by a usage limit isn't stalled until the limit resets.
 3. Act, using only these:
-   - **A stalled agent with work left in `status`:** `herdr agent prompt pair-<name> "Continue the pair-with loop as agent '<name>'. Go straight to The loop."` without `--wait`, at most twice per agent per item, counted from the log. After that, record it for the user.
+   - **A stalled agent with work left in `status`:** `hc send <address> "Continue the pair-with loop as agent '<name>'. Go straight to The loop."` without `--wait` or `--if` (`--if idle` refuses a `done` agent), at most twice per agent per item, counted from the log. After that, record it for the user.
    - **An agent paused on an approval prompt:** approve once, never with an "always allow" option, but only for ordinary build, test, git or file work inside the repo or its worktrees for its item. Leave the prompt alone and record it if it deletes anything outside its worktree, pushes, deploys, uses credentials, touches anything named in `off_limits`, or does anything you can't tell.
    - **An agent's process or pane is gone:** start one replacement as **Starting a run** step 5 does, with the prompt above. Do this once per agent per day, and only after checking that no agent with that name is alive.
    - **An agent breaking a testing rule its pane shows:** send one reminder with `herdr agent prompt pair-<name> "<text>"`, without `--wait`, once per reminder per item, counted from the log. Never send one while the agent is waiting on an approval prompt. Use only these texts:

@@ -1182,10 +1182,10 @@ def cmd_doctor(ctx, _args):
                         "both need this; a sandbox protecting .git causes this.")
     if not git_ok("rev-parse", "--verify", "--quiet", f"refs/heads/{ctx.main}", cwd=ctx.root):
         problems.append(f"main branch {ctx.main!r} does not exist")
-    if os.environ.get("HERDR_ENV") != "1":
-        problems.append("not running inside a herdr pane")
-    if not shutil.which("herdr"):
-        problems.append("herdr is not on PATH")
+    if not os.environ.get("HC_TERMINAL_ID"):
+        problems.append("not running inside a herdr-core terminal")
+    if not shutil.which("hc"):
+        problems.append("hc is not on PATH")
     for name, agent in ctx.agents.items():
         if not shutil.which(agent.get("kind", "")):
             problems.append(f"agent {name}: {agent.get('kind')!r} is not on PATH")

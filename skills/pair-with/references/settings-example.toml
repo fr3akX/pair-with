@@ -22,7 +22,7 @@ off_limits = [
 ]
 repo_notes = "Keep the native iOS contract in sync: scripts/generate-ios-contract.py."
 
-# Each agent's kind is its herdr agent kind. args go to its command line.
+# Each agent's kind is its command (claude or codex). args go to its command line.
 # Approval prompts pause an agent until you answer in its pane. See Permissions in SKILL.md.
 [agents.claude]
 kind = "claude"
