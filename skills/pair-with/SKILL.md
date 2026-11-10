@@ -35,7 +35,7 @@ You are the first agent unless your prompt names you as joining a run.
    ```
    Don't wait for it: you start working straight away too. If `hc run` fails or `hc get pair-<name>` doesn't show it `live`, stop and tell the user.
    Any agent of the run is addressed by its label: `$(hc ls --json --label pair.agent=<name> | jq -r '.terminals[0].address')`, written `<address of name>` below.
-6. If the user asked for a watch, such as "pair with codex astra high, watched", start it as **Watching a run** describes.
+6. If the user asked for a supervisor, such as "pair with codex astra high, supervised", start it as **Supervising a run** describes. Older requests may say "watched"; treat them the same.
 7. Go to **The loop**.
 
 ## Choosing the other agent
@@ -100,7 +100,7 @@ If the brief has a `## Priorities` section, write items for its P0 entries first
 - **Retire covered records.** When a newer passing test or recorded result covers the same behaviour as an older one, take the older one out of the suite instead of updating or retaking it. Keep its files, and in the evidence name each retired record and what now covers it. This isn't narrowing a check. The reviewer confirms each one and restores any whose behaviour nothing else covers.
 - **Counting progress.** After a smoke item, a unit of progress counts as done only if every check its done test names ran in full during that batch. Otherwise it waits for the next full integration.
 - **Lookahead items.** One agent takes the closing check, so give the other one work. Write two lookahead items in a batch that ends with a full integration, and at most one small one in a smoke batch. Each depends on the batch's other items, as the closing check does, so it opens when the closing check does. It prepares later work without needing the closing check's result, for example by reading code, capturing reference behaviour or drafting a design for a hard unit, and records what it found. It doesn't touch anything the closing check touches. Size it to about the closing check's length, and make the next `plan-batch` item depend on it.
-- **Reminders.** The watch may send an agent a one-line reminder that quotes one of these testing rules. Treat it as that rule, and carry on.
+- **Reminders.** The supervisor may send an agent a one-line reminder that quotes one of these testing rules. Treat it as that rule, and carry on.
 
 A goal never widens what's off limits. Deploying, pushing and anything else reserved for the user stay reserved.
 
@@ -249,18 +249,18 @@ When `next` says stop, run `pair.py status` and report to the user. If `next` sa
 
 Use it when the user asks how the run is going or who did what. Items merged before this was recorded have no times, and `timed` says how many do.
 
-## Watching a run
+## Supervising a run
 
-A watch is an optional third agent that keeps an unattended run moving. It checks the run on a timer, unblocks what it safely can, and keeps a log for the user. It never mediates: anything the two agents escalate stays with the user.
+A supervisor is an optional third agent that keeps an unattended run moving. It checks the run on a timer, unblocks what it safely can, and keeps a log for the user. It never mediates: anything the two agents escalate stays with the user.
 
-**Starting it.** The first agent starts the watch after the other agent, in a new pane of its tab. It's always Claude, because it relies on `/loop`. Its args come from `[watch]` in the settings, default `["--model", "sonnet"]`, and its interval comes from `every_minutes`, default 60.
+**Starting it.** The first agent starts the supervisor after the other agent, in a new pane of its tab. It's always Claude, because it relies on `/loop`. Its args come from `[supervisor]` in the settings (older settings call it `[watch]`), default `["--model", "sonnet"]`, and its interval comes from `every_minutes`, default 60.
 
 ```bash
 L=$(hc get "$HC_TERMINAL_ID" | jq -r '"--label herdr.space=\(.labels["herdr.space"]) --label herdr.tab=\(.labels["herdr.tab"])"')
-hc run --bg --no-parent --keep --name pair-watch --cwd "$PWD" --label pair.agent=watch $L -- claude <watch args> "/loop <every_minutes>m Use the pair-with skill as this run's watch. Do one round of Watching a run."
+hc run --bg --no-parent --keep --name pair-supervisor --cwd "$PWD" --label pair.agent=supervisor $L -- claude <supervisor args> "/loop <every_minutes>m Use the pair-with skill as this run's supervisor. Do one round of Supervising a run."
 ```
 
-**One round.** The watch acts on its own, so it never asks a question or waits for an answer.
+**One round.** The supervisor acts on its own, so it never asks a question or waits for an answer.
 
 1. Read: `pair.py status`; `hc ls --json --label pair.agent=<name>` for each agent; for each, `hc get <address>` (`.status.state`) and `hc read <address> --lines 60`; `ps -Ao pid,etime,command` filtered to `pair.py` and the repo's check commands; the log below.
 2. Decide whether each agent is **stalled**. It is only if all of these are true: `hc get` shows its state `idle` or `done` (`done` is a turn that ended unwatched), its pane shows a finished turn at an empty prompt, no background shell or task of its is running, and no `pair.py` process of its is running. Waiting on `next`, a long check, or a silent hour isn't a stall. An agent paused by a usage limit isn't stalled until the limit resets.
@@ -268,11 +268,11 @@ hc run --bg --no-parent --keep --name pair-watch --cwd "$PWD" --label pair.agent
    - **A stalled agent with work left in `status`:** `hc send <address> "Continue the pair-with loop as agent '<name>'. Go straight to The loop."` without `--wait` or `--if` (`--if idle` refuses a `done` agent), at most twice per agent per item, counted from the log. After that, record it for the user.
    - **An agent paused on an approval prompt:** approve once, never with an "always allow" option, but only for ordinary build, test, git or file work inside the repo or its worktrees for its item. Leave the prompt alone and record it if it deletes anything outside its worktree, pushes, deploys, uses credentials, touches anything named in `off_limits`, or does anything you can't tell.
    - **An agent's process or pane is gone:** start one replacement as **Starting a run** step 5 does, with the prompt above. Do this once per agent per day, and only after checking that no agent with that name is alive.
-   - **An agent breaking a testing rule its pane shows:** send one reminder with `herdr agent prompt pair-<name> "<text>"`, without `--wait`, once per reminder per item, counted from the log. Never send one while the agent is waiting on an approval prompt. Use only these texts:
+   - **An agent breaking a testing rule its pane shows:** send one reminder with `hc send <address> "<text>"`, without `--wait` or `--if`, once per reminder per item, counted from the log. Never send one while the agent is waiting on an approval prompt. Use only these texts:
      - when it reruns a whole set of tests or workflows after a fix that touched only some of them: "Reminder from the skill: after a small fix, rerun only what that fix affects, not the whole set."
      - when a smoke item adds regression tests, retakes recorded results or changes what triggers the full suite: "Reminder from the skill: a smoke item adds no regression tests, retakes no recorded results and doesn't change what triggers the full suite."
      - when a full integration updates or retakes an older record that a newer passing one covers: "Reminder from the skill: retire an older record that a newer passing one covers, instead of retaking it."
-4. **Watch the pace.** Run `pair.py report --since 24h` and compare it with the whole run's `pair.py report`. Record a slowdown when any of these is true:
+4. **Check the pace.** Run `pair.py report --since 24h` and compare it with the whole run's `pair.py report`. Record a slowdown when any of these is true:
    - the last batch's `hours` is more than 1.5 times the median of the three batches before it;
    - one of its `slowest` items took more than half the batch;
    - a check's `median_minutes` over the last day is more than 1.5 times its median for the whole run, or its runs fail more than a third of the time;
@@ -283,14 +283,14 @@ hc run --bg --no-parent --keep --name pair-watch --cwd "$PWD" --label pair.agent
 
    When a goal batch closes, also record each agent's idle hours in it (`waited_hours` for that span) and whether it had the lookahead items **Closing checks** asks for.
 5. **Forecast usage.** Read each agent's usage from its pane, such as the weekly percentage left in Codex's footer or a limit message in Claude's, and log it. From the log, work out how much a batch uses. Tell the user once each when an agent falls below 15% and 10%, and when the forecast shows it running out before the current batch's closing check and plan merge. Running out pauses that agent until the limit resets, which the user may prefer to plan for.
-6. **Watch the result, in a goal run.** When a batch's progress fold merges, log the counts the brief measures. If it adds nothing that counts as done, count the batches in a row without any. From the second such batch on, tell the user, with the units the evidence names as closest to done and what each still lacks. This is separate from the stop rule in **Running toward a goal**, which only looks for batches that verified nothing new.
-7. Append one line to `<git common dir>/backlog-duo/watch.log`: the time, merged count, active and open items, each agent's state and usage, what you did, and anything from steps 4 to 6.
+6. **Check the result, in a goal run.** When a batch's progress fold merges, log the counts the brief measures. If it adds nothing that counts as done, count the batches in a row without any. From the second such batch on, tell the user, with the units the evidence names as closest to done and what each still lacks. This is separate from the stop rule in **Running toward a goal**, which only looks for batches that verified nothing new.
+7. Append one line to `<git common dir>/backlog-duo/supervisor.log`: the time, merged count, active and open items, each agent's state and usage, what you did, and anything from steps 4 to 6.
 
 Never run `next`, `submit`, `check`, `merge`, `release`, `escalate` or `requeue`. Never rule on a `needs_you`, `held` or `attention` item. Never edit code, settings, items or state, commit, kill a process, delete anything, start more agents than step 3 allows, or send an agent any text other than the ones step 3 gives.
 
 An agent that stopped because the run is paused isn't stalled. Never run `pause` or `resume` yourself.
 
-**Ending.** End when both agents have stopped and either `status` shows nothing active or open with no `plan-batch` item left on the main branch, or `status` shows `paused` with nothing active. Write a final summary to the log and the pane. Cover what merged, `pair.py report` for the run, where the time went, idle agent-hours, reminders sent, any slowdowns recorded, each agent's usage left, each `needs_you` item with the exact decision it needs, and every action the watch took. For a pause, also say the run is waiting for the user to re-prioritize and resume it. Then end the loop.
+**Ending.** End when both agents have stopped and either `status` shows nothing active or open with no `plan-batch` item left on the main branch, or `status` shows `paused` with nothing active. Write a final summary to the log and the pane. Cover what merged, `pair.py report` for the run, where the time went, idle agent-hours, reminders sent, any slowdowns recorded, each agent's usage left, each `needs_you` item with the exact decision it needs, and every action the supervisor took. For a pause, also say the run is waiting for the user to re-prioritize and resume it. Then end the loop.
 
 ## Red flags
 
@@ -310,4 +310,4 @@ An agent that stopped because the run is paused isn't stalled. Never run `pause`
 | "I'll narrow the check so this merge goes faster" | Never. Narrow your own test runs, not the gate |
 | "A small direct commit to main is fine" | Only `pair.py merge` lands work |
 | "The Mac needs disk space, I'll clear old builds" | Delete nothing. Low disk goes to the user |
-| "As the watch, I can settle this escalation" | Never. The watch unblocks; decisions stay with the user |
+| "As the supervisor, I can settle this escalation" | Never. The supervisor unblocks; decisions stay with the user |

@@ -35,8 +35,8 @@ args = ["-m", "gpt-6.1-sol",  # or "gpt-6-astra"
         "-c", 'sandbox_workspace_write.writable_roots=["/home/maris/projects/weat/.git"]',
         "-c", "sandbox_workspace_write.network_access=true"]
 
-# Optional. Used only when the user asks for a watched run. The watch is always Claude.
-[watch]
+# Optional. Used only when the user asks for a supervised run. The supervisor is always Claude.
+[supervisor]
 args = ["--model", "sonnet"]
 every_minutes = 60
 
